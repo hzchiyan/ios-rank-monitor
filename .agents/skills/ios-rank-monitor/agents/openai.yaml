@@ -1,0 +1,4 @@
+interface:
+  display_name: "iOS 榜单监测"
+  short_description: "通过本机浏览器采集七麦美德日分类双榜，比较新进前80并生成本地可筛选报告"
+  default_prompt: "使用 $ios-rank-monitor 执行本仓库的七麦榜单采集与本地报告流程。"

@@ -1,0 +1,266 @@
+{
+  "schemaVersion": 1,
+  "ruleVersion": "either_chart_new_top80_v1",
+  "timezone": "Asia/Shanghai",
+  "device": "iphone",
+  "cutoff": 80,
+  "countries": {
+    "us": "美国",
+    "de": "德国",
+    "jp": "日本"
+  },
+  "charts": {
+    "free": "免费榜",
+    "grossing": "畅销榜"
+  },
+  "schedule": [
+    "02:00",
+    "06:00",
+    "12:00",
+    "18:00"
+  ],
+  "categories": [
+    {
+      "family": "应用",
+      "name": "效率",
+      "genreId": "6007",
+      "sourceCategory": "效率"
+    },
+    {
+      "family": "应用",
+      "name": "财务",
+      "genreId": "6015",
+      "sourceCategory": "财务"
+    },
+    {
+      "family": "应用",
+      "name": "报刊杂志",
+      "genreId": "6021",
+      "sourceCategory": "报刊杂志"
+    },
+    {
+      "family": "应用",
+      "name": "参考",
+      "genreId": "6006",
+      "sourceCategory": "参考"
+    },
+    {
+      "family": "应用",
+      "name": "导航",
+      "genreId": "6010",
+      "sourceCategory": "导航"
+    },
+    {
+      "family": "应用",
+      "name": "工具",
+      "genreId": "6002",
+      "sourceCategory": "工具"
+    },
+    {
+      "family": "应用",
+      "name": "购物",
+      "genreId": "6024",
+      "sourceCategory": "购物"
+    },
+    {
+      "family": "应用",
+      "name": "健康健美",
+      "genreId": "6013",
+      "sourceCategory": "健康健美"
+    },
+    {
+      "family": "应用",
+      "name": "教育",
+      "genreId": "6017",
+      "sourceCategory": "教育"
+    },
+    {
+      "family": "应用",
+      "name": "旅游",
+      "genreId": "6003",
+      "sourceCategory": "旅游"
+    },
+    {
+      "family": "应用",
+      "name": "美食佳饮",
+      "genreId": "6023",
+      "sourceCategory": "美食佳饮"
+    },
+    {
+      "family": "应用",
+      "name": "软件开发工具",
+      "genreId": "6026",
+      "sourceCategory": "软件开发工具"
+    },
+    {
+      "family": "应用",
+      "name": "商务",
+      "genreId": "6000",
+      "sourceCategory": "商务"
+    },
+    {
+      "family": "应用",
+      "name": "社交",
+      "genreId": "6005",
+      "sourceCategory": "社交"
+    },
+    {
+      "family": "应用",
+      "name": "摄影与录像",
+      "genreId": "6008",
+      "sourceCategory": "摄影与录像"
+    },
+    {
+      "family": "应用",
+      "name": "生活",
+      "genreId": "6012",
+      "sourceCategory": "生活"
+    },
+    {
+      "family": "应用",
+      "name": "体育",
+      "genreId": "6004",
+      "sourceCategory": "体育"
+    },
+    {
+      "family": "应用",
+      "name": "天气",
+      "genreId": "6001",
+      "sourceCategory": "天气"
+    },
+    {
+      "family": "应用",
+      "name": "图书",
+      "genreId": "6018",
+      "sourceCategory": "图书"
+    },
+    {
+      "family": "应用",
+      "name": "图形和设计",
+      "genreId": "6027",
+      "sourceCategory": "图形和设计"
+    },
+    {
+      "family": "应用",
+      "name": "新闻",
+      "genreId": "6009",
+      "sourceCategory": "新闻"
+    },
+    {
+      "family": "应用",
+      "name": "医疗",
+      "genreId": "6020",
+      "sourceCategory": "医疗"
+    },
+    {
+      "family": "应用",
+      "name": "音乐",
+      "genreId": "6011",
+      "sourceCategory": "音乐"
+    },
+    {
+      "family": "应用",
+      "name": "娱乐",
+      "genreId": "6016",
+      "sourceCategory": "娱乐"
+    },
+    {
+      "family": "游戏",
+      "name": "策略",
+      "genreId": "7017",
+      "sourceCategory": "策略"
+    },
+    {
+      "family": "游戏",
+      "name": "动作",
+      "genreId": "7001",
+      "sourceCategory": "动作"
+    },
+    {
+      "family": "游戏",
+      "name": "家庭聚会",
+      "genreId": "7009",
+      "sourceCategory": "家庭聚会"
+    },
+    {
+      "family": "游戏",
+      "name": "角色扮演",
+      "genreId": "7014",
+      "sourceCategory": "角色扮演"
+    },
+    {
+      "family": "游戏",
+      "name": "竞速",
+      "genreId": "7013",
+      "sourceCategory": "竞速"
+    },
+    {
+      "family": "游戏",
+      "name": "卡牌",
+      "genreId": "7005",
+      "sourceCategory": "卡牌"
+    },
+    {
+      "family": "游戏",
+      "name": "冒险",
+      "genreId": "7002",
+      "sourceCategory": "冒险"
+    },
+    {
+      "family": "游戏",
+      "name": "模拟",
+      "genreId": "7015",
+      "sourceCategory": "模拟"
+    },
+    {
+      "family": "游戏",
+      "name": "体育",
+      "genreId": "7016",
+      "sourceCategory": "体育"
+    },
+    {
+      "family": "游戏",
+      "name": "问答",
+      "genreId": "7018",
+      "sourceCategory": "问答"
+    },
+    {
+      "family": "游戏",
+      "name": "休闲",
+      "genreId": "7003",
+      "sourceCategory": "休闲"
+    },
+    {
+      "family": "游戏",
+      "name": "益智解谜",
+      "genreId": "7012",
+      "sourceCategory": "益智解谜"
+    },
+    {
+      "family": "游戏",
+      "name": "音乐",
+      "genreId": "7011",
+      "sourceCategory": "音乐"
+    },
+    {
+      "family": "游戏",
+      "name": "桌面",
+      "genreId": "7004",
+      "sourceCategory": "桌面"
+    },
+    {
+      "family": "游戏",
+      "name": "字谜",
+      "genreId": "7019",
+      "sourceCategory": "字谜"
+    },
+    {
+      "family": "游戏",
+      "name": "娱乐场游戏",
+      "genreId": "7006",
+      "sourceCategory": "娱乐场"
+    }
+  ],
+  "maxScopeRetries": 2,
+  "maxRunMinutes": 90
+}
