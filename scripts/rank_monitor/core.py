@@ -215,17 +215,22 @@ class Store:
 
     def start(self, at=None, run_id=None, origin="browser"):
         with self.guard():
+            when = parse_time(at) if at else utcnow()
+            clock = when if self.mode == "test" and at else utcnow()
             active_path = self.base / "active.json"
             state = self.state()
             if not active_path.exists() and state["latestRunId"] and self.manifest(state["latestRunId"])["status"] == "running":
                 self._seal(state["latestRunId"], "interrupted")
             if active_path.exists():
                 active = read_json(active_path)
-                age = (utcnow() - parse_time(active["leaseUpdatedAt"])).total_seconds()
-                if age < self.config["maxRunMinutes"] * 60:
+                active_manifest = self.manifest(active["runId"])
+                deadline = parse_time(active_manifest["startedAt"]) + timedelta(minutes=active_manifest["config"]["maxRunMinutes"])
+                if active_manifest["status"] != "running":
+                    active_path.unlink()
+                elif clock < deadline:
                     return {"skipped": True, "runId": active["runId"], "reason": "已有任务进行中"}
-                self._seal(active["runId"], "interrupted")
-            when = parse_time(at) if at else utcnow()
+                else:
+                    self._seal(active["runId"], "interrupted")
             state = self.state()
             if state["runs"] and when <= parse_time(self.manifest(state["latestRunId"])["startedAt"]):
                 raise ValueError("运行时间必须晚于上一正式记录；历史导入应从空目录按顺序进行")
@@ -280,6 +285,7 @@ class Store:
                 raise ValueError("该范围已有完整快照；不能用后采数据覆盖")
             write_json(file, snap)
             m["scopes"][key].update(status="complete", capturedAt=snap["capturedAt"])
+            m["scopes"][key].pop("reason", None)
             write_json(self.locate(run_id) / "manifest.json", m)
             write_json(self.base / "active.json", {"runId": run_id, "leaseUpdatedAt": stamp(utcnow())})
             return {"accepted": True, "scope": key, "rows": len(snap["rows"])}
@@ -330,6 +336,7 @@ class Store:
             saved = next((snap for snap in snaps if scope_key(snap) == scope_key(s)), None)
             if saved:
                 s.update(status="complete", capturedAt=saved["capturedAt"])
+                s.pop("reason", None)
             elif s["status"] == "complete":
                 s.update(status="interrupted", reason="完整状态缺少对应快照，需要检查存储")
             if s["status"] == "pending":
