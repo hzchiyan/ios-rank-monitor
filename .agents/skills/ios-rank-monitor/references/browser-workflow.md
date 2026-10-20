@@ -30,3 +30,13 @@ DOM改变则记录解析失败；日常任务不自行改解析代码。维护�
 取得并观察tab后，在工具编程环境读取`assets/read-qimai.js`，将完整表达式文本传给文档规定的只读evaluate。文件已经包含自执行括号，不需要再次包装。使用文件系统仅为读本地适配函数、保存结果，不代替浏览器联网。优先返回结构化对象，避免一个大outerHTML字符串被截断。不要把截断结果标成功。
 
 工具重置后重新获取句柄，从磁盘resume，不依赖旧变量。每个scope保留实际capturedAt。到90分钟窗口或全部结束时finalize，已成功快照不重复覆盖。展示本地报告路径和待比较范围，不以样本通过宣称全量完成。
+
+## 新进候选的最早发布日期
+
+完整排名保存后调用`prepare-release RUN_ID --token TOKEN`，仅访问其pending清单；按国家＋App ID去重，不能为全部榜单App重复访问。已核实缓存由程序固化到本轮，不伪装成本轮新采集。
+
+1. 导航pending中的sourceUrl（应用详情页），等待可见`.app-header .i-id .new-value`显示当前App ID，再核对头部所选国家。URL正确不代表头部已经切换，二者都须一致。
+2. 通过文档允许的只读evaluate执行`assets/read-qimai-release.js`完整表达式。当前适配依据：`.app-header .new-item`中`.type`文字恰为“最早发布”，日期取该项`.value`；App ID取`.i-id .new-value`，国家取头部可见的`.ivu-dropdown-rel .icon-flag`所属文字。只读可见DOM，不读框架状态或私有接口。
+3. 在工具编程环境合并pending项、实际页面结果和真实当前UTC `observedAt`，实际页面字段覆盖计划字段，立即`ingest-release`。读到有效日期才用verified；标签缺失/日期不可识别用unavailable并写原因，导航或登录失败用failed。不能退回“最近更新”“版本日期”或猜测日期。
+4. 初次加最多2次重试；工具/登录整体失败停止重复访问。到本轮开始后90分钟即结束，未取得日期的候选保留待核实。不要为了补齐日期扩大时间窗口。
+5. 同轮恢复用resume、prepare-release重新取得待核实清单。结果由程序按本轮固定参考日判断；六个月以外排除，晚于参考日或未知单列。不要让日期过滤删掉原始前80，也不要为旧轮次补查。

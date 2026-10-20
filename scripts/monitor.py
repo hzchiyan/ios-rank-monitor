@@ -17,16 +17,16 @@ def main():
     importer = sub.add_parser("import-legacy", help="导入本地旧版快照，不访问网络")
     importer.add_argument("path")
     importer.add_argument("--mode", choices=["formal", "test"], default="formal")
-    for name in ["doctor", "start", "pending", "resume", "ingest", "mark", "finalize", "render"]:
+    for name in ["doctor", "start", "pending", "resume", "ingest", "mark", "prepare-release", "ingest-release", "finalize", "render"]:
         p = sub.add_parser(name)
         p.add_argument("--mode", choices=["formal", "test"], default=None)
-        if name in ["pending", "resume", "ingest", "mark", "finalize"]:
+        if name in ["pending", "resume", "ingest", "mark", "prepare-release", "ingest-release", "finalize"]:
             p.add_argument("run_id")
-        if name in ["resume", "ingest", "mark", "finalize"]:
+        if name in ["resume", "ingest", "mark", "prepare-release", "ingest-release", "finalize"]:
             p.add_argument("--token", required=True)
         if name == "start":
             p.add_argument("--at")
-        if name in ["ingest", "mark"]:
+        if name in ["ingest", "mark", "ingest-release"]:
             p.add_argument("--input", help="JSON文件；省略时读取标准输入")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -51,10 +51,14 @@ def main():
         return {"scopes": store.pending(args.run_id)}
     if args.command == "resume":
         return store.resume(args.run_id, args.token)
-    if args.command in ["ingest", "mark"]:
+    if args.command == "prepare-release":
+        return store.prepare_release(args.run_id, args.token)
+    if args.command in ["ingest", "mark", "ingest-release"]:
         raw = json.loads(Path(args.input).read_text() if args.input else sys.stdin.read())
         if args.command == "ingest":
             return store.ingest(args.run_id, args.token, raw)
+        if args.command == "ingest-release":
+            return store.ingest_release(args.run_id, args.token, raw)
         return store.mark(args.run_id, args.token, raw["scope"], raw["status"], raw["reason"])
     if args.command == "finalize":
         return store.finalize(args.run_id, args.token)

@@ -35,25 +35,40 @@ def count(value):
 
 def markdown_report(report, config):
     r, coverage = report["run"], report["coverage"]
+    policy = r.get("releasePolicy")
+    def total(key):
+        value = report["counts"][key]
+        return "待核实" if policy and value is None and coverage["comparableScopes"] else count(value)
     lines = [f"# iOS 榜单监测 · {clock(r['startedAt'])}", "",
              "[返回日期页](../../index.md) · [返回总览](../../../index.md) · [筛选查看](report.html)", "",
              f"- 运行编号：{r['runId']}；状态：{r['status']}；来源：{r['origin']}",
              f"- 上一任务：{r['previousRunId'] or '无（建立基线）'}；规则版本：{r['ruleVersion']}",
              f"- 完整榜单：{coverage['completeScopes']}/{coverage['plannedScopes']}；可比较：{coverage['comparableScopes']}；待比较：{coverage['unknownScopes']}",
-             f"- 已确认新进：{count(report['counts']['confirmedNew'])}；免费榜：{count(report['counts']['freeNew'])}；畅销榜：{count(report['counts']['grossingNew'])}", "",
+             f"- 已确认新进：{total('confirmedNew')}；免费榜：{total('freeNew')}；畅销榜：{total('grossingNew')}", "",
              "缺数与待比较不等于零；已确认数量仅覆盖可比较范围。前次未在前80内，不代表已知前次具体名次。", ""]
+    if policy:
+        lines += [f"- 上线准入：七麦最早发布 {policy['windowStarts']['6']} 至 {policy['referenceDate']}（包含边界日）；策略：{policy['version']}",
+                  f"- 排名候选：{count(report['counts']['rankCandidates'])}；超过六个月排除：{count(report['counts']['excludedOlder'])}；首次发布日期待核实：{count(report['counts']['pendingRelease'])}", ""]
     grouped = defaultdict(list)
     for e in report["entries"]:
         grouped[(e["categoryFamily"], e["category"], e["country"])].append(e)
     for (family, category, country), entries in sorted(grouped.items()):
+        release_header = " 最早发布 |" if policy else ""
         lines += [f"## {cell(family)} / {cell(category)} · {config['countries'][country]}", "",
-                  "| App | 开发者 | 免费榜 | 畅销榜 | 触发 | 评分 / 数量 | 版本日期 |", "|---|---|---:|---:|---|---|---|"]
+                  f"| App | 开发者 | 免费榜 | 畅销榜 | 触发 | 评分 / 数量 |{release_header} 版本日期 |",
+                  "|---|---|---:|---:|---|---|" + ("---|" if policy else "") + "---|"]
         for e in entries:
             rank = lambda chart: e["ranks"][chart] or ("前80以外/未上榜" if e["rankStates"][chart] == "outside_top80" else "缺数")
-            lines.append(f"| [{cell(e['name'])}]({e['qimaiUrl']}) · {e['appId']} | {cell(e['developer'])} | {rank('free')} | {rank('grossing')} | {'、'.join(config['charts'][x] for x in e['triggers'])} | {cell(e['rating'])} / {cell(e['ratingCount'])} | {cell(e['latestVersionDate'])} |")
+            release_value = f" {cell(e.get('releaseDate'))} |" if policy else ""
+            lines.append(f"| [{cell(e['name'])}]({e['qimaiUrl']}) · {e['appId']} | {cell(e['developer'])} | {rank('free')} | {rank('grossing')} | {'、'.join(config['charts'][x] for x in e['triggers'])} | {cell(e['rating'])} / {cell(e['ratingCount'])} |{release_value} {cell(e['latestVersionDate'])} |")
         lines.append("")
     if not grouped:
         lines += ["本轮没有已确认的新进记录。请结合上方可比较范围判断是否为基线或缺数。", ""]
+    if policy and report["releasePending"]:
+        lines += ["## 首次发布日期待核实", "", "| App | 国家 / 分类 | 原因 |", "|---|---|---|"]
+        for e in report["releasePending"]:
+            lines.append(f"| [{cell(e['name'])}]({e['qimaiUrl']}) · {e['appId']} | {cell(config['countries'][e['country']])} / {cell(e['categoryFamily'])} / {cell(e['category'])} | {cell(e['releaseReason'])} |")
+        lines.append("")
     lines += ["## 数据覆盖与异常", "", "| 国家 | 大类 / 分类 | 榜单 | 当前状态 | 比较 | 原因 |", "|---|---|---|---|---|---|"]
     for s in coverage["scopes"]:
         if s["status"] != "complete" or s["comparison"] == "unknown":

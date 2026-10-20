@@ -67,6 +67,8 @@ def load_config(root):
         raise ValueError("需要40个互不重复的分类编号")
     if sum(x["family"] == "应用" for x in cats) != 24 or sum(x["family"] == "游戏" for x in cats) != 16:
         raise ValueError("分类应为24个应用分类和16个游戏分类")
+    from .releases import policy_for
+    policy_for(c, "2026-01-01")
     return c
 
 
@@ -194,13 +196,15 @@ class Store:
     def manifest(self, run_id):
         return read_json(self.locate(run_id) / "manifest.json")
 
-    def _authorize(self, run_id, token, restore_active=False):
+    def _authorize(self, run_id, token, restore_active=False, require_window=False):
         p = self.local / "tokens" / run_id
         if not p.exists() or not hmac.compare_digest(p.read_text(), token or ""):
             raise ValueError("运行令牌不匹配；不能修改其他运行")
         m = self.manifest(run_id)
         if m["status"] != "running":
             raise ValueError("运行已结束，原始快照不可修改")
+        if require_window and self.mode != "test" and utcnow() >= parse_time(m["startedAt"]) + timedelta(minutes=m["config"]["maxRunMinutes"]):
+            raise ValueError("本轮90分钟窗口已结束，请finalize归档")
         if m["configFingerprint"] != config_id(self.config):
             raise ValueError("采集期间配置发生改变，请结束本轮后重新启动")
         if self.state()["latestRunId"] != run_id:
@@ -255,12 +259,17 @@ class Store:
                  "codeVersion": version, "ruleVersion": self.config["ruleVersion"],
                  "configFingerprint": config_id(self.config), "config": self.config,
                  "scopes": {scope_key(s): {**s, "status": "pending"} for s in scopes(self.config)}}
+            from .releases import policy_for
+            policy = policy_for(self.config, day) if origin == "browser" else None
+            if policy:
+                m["releasePolicy"] = policy
             write_json(path / "manifest.json", m)
             state["runs"].append({"runId": run_id, "relativePath": relative})
             state["latestRunId"] = run_id
             write_json(self.base / "state.json", state)
             write_json(active_path, {"runId": run_id, "leaseUpdatedAt": stamp(utcnow())})
-            return {"runId": run_id, "token": token, "relativePath": relative, "previousRunId": m["previousRunId"], "plannedScopes": len(m["scopes"])}
+            return {"runId": run_id, "token": token, "relativePath": relative, "previousRunId": m["previousRunId"], "plannedScopes": len(m["scopes"]),
+                    "deadlineAt": stamp(when + timedelta(minutes=self.config["maxRunMinutes"]))}
 
     def pending(self, run_id):
         m = self.manifest(run_id)
@@ -270,7 +279,9 @@ class Store:
         with self.guard():
             m = self._authorize(run_id, token, restore_active=True)
             write_json(self.base / "active.json", {"runId": run_id, "leaseUpdatedAt": stamp(utcnow())})
-            return {"runId": run_id, "completedScopes": sum(s["status"] == "complete" for s in m["scopes"].values()), "pending": self.pending(run_id)}
+            deadline = parse_time(m["startedAt"]) + timedelta(minutes=m["config"]["maxRunMinutes"])
+            return {"runId": run_id, "completedScopes": sum(s["status"] == "complete" for s in m["scopes"].values()), "pending": self.pending(run_id),
+                    "deadlineAt": stamp(deadline), "windowExpired": utcnow() >= deadline}
 
     def ingest(self, run_id, token, raw):
         with self.guard():
@@ -301,6 +312,22 @@ class Store:
             m["scopes"][key].update(status=status, reason=reason[:500])
             write_json(self.locate(run_id) / "manifest.json", m)
             return {"marked": key, "status": status}
+
+    def prepare_release(self, run_id, token):
+        from .releases import ReleaseRecords
+        with self.guard():
+            m = self._authorize(run_id, token, require_window=True)
+            if not m.get("releasePolicy"):
+                raise ValueError("旧规则运行不补查首次发布日期")
+            return ReleaseRecords(self).prepare(m)
+
+    def ingest_release(self, run_id, token, raw):
+        from .releases import ReleaseRecords
+        with self.guard():
+            m = self._authorize(run_id, token, require_window=True)
+            if not m.get("releasePolicy"):
+                raise ValueError("旧规则运行不补查首次发布日期")
+            return ReleaseRecords(self).ingest(m, raw)
 
     def snapshots(self, run_id):
         path = self.locate(run_id)
@@ -342,7 +369,15 @@ class Store:
             if s["status"] == "pending":
                 s.update(status=remaining, reason="任务结束前未取得有效快照")
         m["status"] = "complete" if len(snaps) == len(m["scopes"]) else "partial" if snaps else "failed"
-        m["finishedAt"] = max([m["startedAt"], *[s["capturedAt"] for s in snaps]])
+        m["finishedAt"] = max([m["startedAt"], *[s["capturedAt"] for s in snaps]], key=parse_time)
+        if m.get("releasePolicy"):
+            from .releases import ReleaseRecords
+            report = ReleaseRecords(self).freeze(m)
+            if report["releasePending"] and m["status"] == "complete":
+                m["status"] = "partial"
+            observations = [r["observedAt"] for r in report["releaseRecords"].values()
+                            if r.get("observedAt") and r.get("origin") == "browser"]
+            m["finishedAt"] = max([m["finishedAt"], *observations], key=parse_time)
         m["sealedAt"] = stamp(utcnow())
         write_json(path / "manifest.json", m)
         active = self.base / "active.json"
@@ -360,7 +395,7 @@ class Store:
             self._render()
         return {"runId": run_id, "status": m["status"], "report": (self.locate(run_id) / "report.md").relative_to(self.root).as_posix()}
 
-    def compare(self, run_id):
+    def _compare_rank(self, run_id):
         m = self.manifest(run_id)
         current = {scope_key(s): s for s in self.snapshots(run_id)}
         previous = {}
@@ -401,6 +436,14 @@ class Store:
             any_comparable = any(s["chart"] == chart and s["comparison"] == "comparable" for s in comparison)
             result["counts"][chart + "New"] = sum(chart in e["triggers"] for e in entries.values()) if any_comparable else None
         return result
+
+    def compare(self, run_id):
+        report = self._compare_rank(run_id)
+        manifest = self.manifest(run_id)
+        if manifest.get("releasePolicy"):
+            from .releases import ReleaseRecords, apply_admission, read_records
+            report = apply_admission(report, manifest, read_records(ReleaseRecords(self).path(run_id)))
+        return report
 
     def render(self):
         with self.guard():
