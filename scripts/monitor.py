@@ -39,6 +39,7 @@ def main():
         from rank_monitor.legacy import import_legacy
         return import_legacy(store, Path(args.path))
     if args.command == "doctor":
+        store.check_history()
         return {"ready": True, "repositoryRoot": str(root), "plannedScopes": len(scopes(store.config)),
                 "configFingerprint": config_id(store.config), "python": sys.version.split()[0],
                 "browserVerified": False, "note": "本命令仅检查本地程序；浏览器、账号和定时权限必须由Codex在目标机实测"}

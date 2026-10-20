@@ -158,7 +158,29 @@ class Store:
                 fcntl.flock(f, fcntl.LOCK_UN)
 
     def state(self):
-        return read_json(self.base / "state.json") if (self.base / "state.json").exists() else {"schemaVersion": SCHEMA, "runs": [], "latestRunId": None}
+        state = read_json(self.base / "state.json") if (self.base / "state.json").exists() else {"schemaVersion": SCHEMA, "runs": [], "latestRunId": None}
+        if state.get("schemaVersion") != SCHEMA or not isinstance(state.get("runs"), list):
+            raise ValueError("历史索引版本不兼容，保留数据并停止")
+        seen = set()
+        for entry in state["runs"]:
+            relative = Path(entry["relativePath"])
+            if relative.is_absolute() or ".." in relative.parts or not (self.root / relative).resolve().is_relative_to(self.base.resolve()):
+                raise ValueError("历史索引含绝对路径或数据目录外路径，不能直接迁移")
+            if entry["runId"] in seen:
+                raise ValueError("历史索引有重复运行编号")
+            seen.add(entry["runId"])
+        if state.get("latestRunId") != (state["runs"][-1]["runId"] if state["runs"] else None):
+            raise ValueError("历史索引的最新任务与顺序不一致")
+        return state
+
+    def check_history(self):
+        previous = None
+        for entry in self.state()["runs"]:
+            m = self.manifest(entry["runId"])
+            if m.get("schemaVersion") != SCHEMA or m.get("runId") != entry["runId"] or m.get("previousRunId") != previous:
+                raise ValueError("历史任务版本或相邻比较链不兼容，保留文件并停止")
+            previous = entry["runId"]
+        return previous
 
     def locate(self, run_id):
         entry = next((x for x in self.state()["runs"] if x["runId"] == run_id), None)
@@ -172,7 +194,7 @@ class Store:
     def manifest(self, run_id):
         return read_json(self.locate(run_id) / "manifest.json")
 
-    def _authorize(self, run_id, token):
+    def _authorize(self, run_id, token, restore_active=False):
         p = self.local / "tokens" / run_id
         if not p.exists() or not hmac.compare_digest(p.read_text(), token or ""):
             raise ValueError("运行令牌不匹配；不能修改其他运行")
@@ -181,11 +203,22 @@ class Store:
             raise ValueError("运行已结束，原始快照不可修改")
         if m["configFingerprint"] != config_id(self.config):
             raise ValueError("采集期间配置发生改变，请结束本轮后重新启动")
+        if self.state()["latestRunId"] != run_id:
+            raise ValueError("只有最新进行中的任务可以写入")
+        active = self.base / "active.json"
+        if active.exists():
+            if read_json(active)["runId"] != run_id:
+                raise ValueError("另一任务持有采集锁")
+        elif not restore_active:
+            raise ValueError("运行标记缺失，请先resume恢复最新任务")
         return m
 
     def start(self, at=None, run_id=None, origin="browser"):
         with self.guard():
             active_path = self.base / "active.json"
+            state = self.state()
+            if not active_path.exists() and state["latestRunId"] and self.manifest(state["latestRunId"])["status"] == "running":
+                self._seal(state["latestRunId"], "interrupted")
             if active_path.exists():
                 active = read_json(active_path)
                 age = (utcnow() - parse_time(active["leaseUpdatedAt"])).total_seconds()
@@ -230,10 +263,7 @@ class Store:
 
     def resume(self, run_id, token):
         with self.guard():
-            m = self._authorize(run_id, token)
-            active = read_json(self.base / "active.json")
-            if active["runId"] != run_id:
-                raise ValueError("另一任务持有采集锁")
+            m = self._authorize(run_id, token, restore_active=True)
             write_json(self.base / "active.json", {"runId": run_id, "leaseUpdatedAt": stamp(utcnow())})
             return {"runId": run_id, "completedScopes": sum(s["status"] == "complete" for s in m["scopes"].values()), "pending": self.pending(run_id)}
 
@@ -245,7 +275,8 @@ class Store:
                 raise ValueError("快照不在本轮计划内")
             snap = normalize_snapshot(raw, m["scopes"][key], self.config, m["startedAt"], self.mode == "test")
             file = self.locate(run_id) / "checkpoints" / (hashlib.sha256(key.encode()).hexdigest() + ".json")
-            if file.exists() and read_json(file) != snap:
+            existing = next((s for s in self.snapshots(run_id) if scope_key(s) == key), None)
+            if existing is not None and existing != snap:
                 raise ValueError("该范围已有完整快照；不能用后采数据覆盖")
             write_json(file, snap)
             m["scopes"][key].update(status="complete", capturedAt=snap["capturedAt"])
@@ -268,10 +299,20 @@ class Store:
     def snapshots(self, run_id):
         path = self.locate(run_id)
         archive = path / "snapshots.jsonl.gz"
+        merged = {}
         if archive.exists():
             with gzip.open(archive, "rt", encoding="utf-8") as f:
-                return [json.loads(line) for line in f if line.strip()]
-        return [read_json(p) for p in sorted((path / "checkpoints").glob("*.json"))]
+                for line in f:
+                    if line.strip():
+                        snap = json.loads(line)
+                        merged[scope_key(snap)] = snap
+        for file in sorted((path / "checkpoints").glob("*.json")):
+            snap = read_json(file)
+            key = scope_key(snap)
+            if key in merged and merged[key] != snap:
+                raise ValueError("归档和恢复分片冲突，保留文件并停止")
+            merged[key] = snap
+        return list(merged.values())
 
     def _seal(self, run_id, remaining="failed"):
         path = self.locate(run_id)
@@ -289,6 +330,8 @@ class Store:
             saved = next((snap for snap in snaps if scope_key(snap) == scope_key(s)), None)
             if saved:
                 s.update(status="complete", capturedAt=saved["capturedAt"])
+            elif s["status"] == "complete":
+                s.update(status="interrupted", reason="完整状态缺少对应快照，需要检查存储")
             if s["status"] == "pending":
                 s.update(status=remaining, reason="任务结束前未取得有效快照")
         m["status"] = "complete" if len(snaps) == len(m["scopes"]) else "partial" if snaps else "failed"
@@ -306,8 +349,8 @@ class Store:
         with self.guard():
             self._authorize(run_id, token)
             m = self._seal(run_id)
-        # Derived reports can be rebuilt after a crash; source snapshots are sealed first.
-        self.render()
+            # Keep index generation serialized with start/ingest and other renderers.
+            self._render()
         return {"runId": run_id, "status": m["status"], "report": (self.locate(run_id) / "report.md").relative_to(self.root).as_posix()}
 
     def compare(self, run_id):
@@ -353,5 +396,9 @@ class Store:
         return result
 
     def render(self):
+        with self.guard():
+            return self._render()
+
+    def _render(self):
         from .reports import render_all
         return render_all(self)

@@ -62,6 +62,14 @@ class MonitorTests(Harness):
         self.assertTrue(d["ready"])
         self.assertEqual(d["plannedScopes"], 240)
 
+    def test_doctor_rejects_incompatible_or_nonportable_history(self):
+        data = self.root / "data"
+        data.mkdir()
+        (data / "state.json").write_text(json.dumps({"schemaVersion": 99, "runs": [], "latestRunId": None}))
+        self.cli("doctor", ok=False)
+        (data / "state.json").write_text(json.dumps({"schemaVersion": 1, "runs": [{"runId": "20261020T010000Z", "relativePath": "/another/computer/data/run"}], "latestRunId": "20261020T010000Z"}))
+        self.cli("doctor", ok=False)
+
     def test_first_run_is_baseline_not_eighty_entrants(self):
         r = self.start("2026-10-20T01:00:00Z")
         self.ingest(r, self.snapshot(range(1, 81)))
@@ -116,6 +124,13 @@ class MonitorTests(Harness):
                         {"sourceUrl": "https://www.qimai.cn/rank/index/brand/free/device/iphone/country/jp/genre/6007"},
                         {"sourceDate": "2026-10-19"}, {"completeTop80": False}]:
             self.ingest(r, self.snapshot(range(1, 81), **changes), ok=False)
+
+    def test_same_named_app_and_game_category_cannot_share_page(self):
+        r = self.start("2026-10-20T01:00:00Z")
+        s = self.snapshot(range(1, 81), categoryFamily="游戏", category="体育", genreId="7016",
+                          title="AppStore美国iPhone体育免费榜实时排名|iOS榜单-七麦数据",
+                          sourceUrl="https://www.qimai.cn/rank/index/brand/free/device/iphone/country/us/genre/6004")
+        self.ingest(r, s, ok=False)
 
     def test_duplicate_start_and_resume_keep_one_run(self):
         a = self.start("2026-10-20T01:00:00Z")

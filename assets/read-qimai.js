@@ -3,6 +3,7 @@
   const txt = (parent, selector) => parent.querySelector(selector)?.textContent.trim() || '';
   const rows = [...document.querySelectorAll('tbody tr')].filter(tr => tr.querySelector('a.app-name'));
   return {
+    sourceUrl: document.URL,
     title: document.title,
     sourceDate: document.querySelector('#date-box')?.textContent.trim() || '',
     loadedRowCount: rows.length,
