@@ -30,7 +30,7 @@ def cell(value):
 
 
 def count(value):
-    return "待比较" if value is None else str(value)
+    return "0" if value is None else str(value)
 
 
 def report_count(report, key="confirmedNew"):
@@ -40,7 +40,7 @@ def report_count(report, key="confirmedNew"):
     chart = key.removesuffix("New") if key in ["freeNew", "grossingNew"] else None
     comparable = any(s["comparison"] == "comparable" and (chart is None or s["chart"] == chart)
                      for s in report["coverage"]["scopes"])
-    return "待核实" if comparable else "待比较"
+    return "待核实" if comparable else "0"
 
 
 def markdown_report(report, config):
@@ -52,7 +52,7 @@ def markdown_report(report, config):
              f"- 上一任务：{r['previousRunId'] or '无（建立基线）'}；规则版本：{r['ruleVersion']}",
              f"- 完整榜单：{coverage['completeScopes']}/{coverage['plannedScopes']}；可比较：{coverage['comparableScopes']}；待比较：{coverage['unknownScopes']}",
              f"- 已确认新进：{report_count(report, 'confirmedNew')}；免费榜：{report_count(report, 'freeNew')}；畅销榜：{report_count(report, 'grossingNew')}", "",
-             "缺数与待比较不等于零；已确认数量仅覆盖可比较范围。前次未在前80内，不代表已知前次具体名次。", ""]
+             "无排名比较依据时数量显示0，具体原因见覆盖说明；已确认数量仅覆盖可比较范围。前次未在前80内，不代表已知前次具体名次。", ""]
     if policy:
         lines += [f"- 上线准入：七麦最早发布 {policy['windowStarts']['6']} 至 {policy['referenceDate']}（包含边界日）；策略：{policy['version']}",
                   f"- 排名候选：{count(report['counts']['rankCandidates'])}；超过六个月排除：{count(report['counts']['excludedOlder'])}；首次发布日期待核实：{count(report['counts']['pendingRelease'])}", ""]

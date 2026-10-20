@@ -57,4 +57,6 @@ verified必须校验可见App ID、国家、明确的最早发布标签及与原
 
 `finalize`会固化尚未核实的候选，日期不完整时将新规则轮次记为partial；排名覆盖数不因此减少。新报告counts增加rankCandidates、excludedOlder、pendingRelease；entries只含近6个自然月的已核实候选，releasePending单列未知记录。所有候选都未核实时confirmedNew为null，零排名候选且有可比较范围时为0。重建仅使用每轮固化证据，不用后来缓存回写历史。
 
+报告展示层将无排名比较依据的数量显示为0，并保留覆盖与待比较说明；report-data.json中的null不改写为0。已有排名候选但日期全部未知时，展示层仍显示待核实。
+
 日期补查次数保存在本轮记录中。prepare-release的pending项包含attempts和attemptsRemaining；首次尝试加最多2次重试，累计用尽后不再返回到pending，exhaustedApps说明仍未核实的耗尽数量。重置或resume不清零，完全相同证据重发不增加次数。正式轮次超时后prepare-release/ingest-release拒绝继续补查，仍可finalize；resume返回deadlineAt与windowExpired，过期立即归档。

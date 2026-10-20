@@ -19,6 +19,19 @@ class Links(HTMLParser):
 
 
 class ReportTests(helpers.Harness):
+    def test_baseline_displays_zero_but_keeps_unknown_comparison_data(self):
+        r = self.start("2026-10-20T01:00:00Z")
+        self.ingest(r, self.snapshot(range(1, 81)))
+        self.finish(r)
+        result = self.result(r)
+        self.assertIsNone(result["counts"]["confirmedNew"])
+        self.assertEqual(result["coverage"]["comparableScopes"], 0)
+        run = self.root / r["relativePath"]
+        self.assertIn("已确认新进：0；免费榜：0；畅销榜：0", (run / "report.md").read_text())
+        self.assertIn("无排名比较依据时数量显示0", (run / "report.md").read_text())
+        self.assertIn("| 1/240 | 0 | 0 |", (run.parents[1] / "index.md").read_text())
+        self.assertIn("最近新进 0", (self.root / "data/test/index.html").read_text())
+
     def test_offline_payload_and_markdown_back_links(self):
         r = self.start("2026-10-20T01:00:00Z")
         s = self.snapshot(range(1, 81))

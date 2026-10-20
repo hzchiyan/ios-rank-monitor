@@ -113,6 +113,8 @@ class ReleaseTests(helpers.Harness):
         self.assertEqual(self.prepare(a)["pending"], [])
         self.finish(a)
         self.assertIsNone(self.result(a)["counts"]["confirmedNew"])
+        self.assertIn('已确认新进：0；免费榜：0；畅销榜：0',
+                      (self.root/a['relativePath']/'report.md').read_text())
         b = self.start("2026-10-20T04:00:00Z")
         self.ingest(b, self.snapshot(range(1,81), at="2026-10-20T04:00:00Z"))
         self.assertEqual(self.prepare(b)["pending"], [])
@@ -300,7 +302,7 @@ class ReleaseTests(helpers.Harness):
         self.finish(b)
         run=self.root/b['relativePath']
         markdown=(run/'report.md').read_text()
-        self.assertIn('已确认新进：待核实；免费榜：待核实；畅销榜：待比较',markdown)
+        self.assertIn('已确认新进：待核实；免费榜：待核实；畅销榜：0',markdown)
         for path in [run.parents[1]/'index.md',self.root/'data/test/index.md',self.root/'data/test/index.html']:
             self.assertIn('待核实',path.read_text())
 

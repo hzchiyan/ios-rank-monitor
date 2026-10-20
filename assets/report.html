@@ -81,10 +81,10 @@ function update(){
     Math.min(...Object.values(a.ranks).filter(x=>x!==null))-Math.min(...Object.values(b.ranks).filter(x=>x!==null))||a.appId.localeCompare(b.appId));
   const pending=modern.flatMap(r=>r.releasePending||[]).filter(matches);
   const hasKnown=runs.some(r=>[...r.entries,...(r.releaseExcluded||[])].some(matches));
-  $('new-count').textContent=!comparable?'待比较':!hasKnown&&pending.length?'待核实':
+  $('new-count').textContent=!comparable?0:!hasKnown&&pending.length?'待核实':
     mode==='entrants'?filtered.length:runs.reduce((n,r)=>n+(r.counts.confirmedNew||0),0);
   let notice=mode==='full'?'完整榜单视图：展示选定时点和榜单的已采集前80，上线月份筛选仅适用于新进App。':
-    `新进视图：${total-comparable} 个排名范围待比较。已确认数量仅覆盖可比较范围；首次采集和缺数均不计为零。`;
+    `新进视图：${total-comparable} 个排名范围待比较。无排名比较依据时入选数量显示0，具体原因见覆盖说明；已确认数量仅覆盖可比较范围。`;
   if(mode==='entrants'){
     if(!modern.length)notice+=' 历史运行未采集最早发布日期，保留原筛选结果，不能按上线月份筛选。';
     else if(!releaseEnabled)notice+=' 所选时点混合新旧规则，保留各轮原口径；请选择新规则时点后使用上线月份筛选。';
