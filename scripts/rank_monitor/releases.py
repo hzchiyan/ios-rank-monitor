@@ -116,7 +116,7 @@ def apply_admission(report, manifest, records):
             older.append(enriched)
         else:
             qualified.append(enriched)
-    report["entries"], report["releasePending"] = qualified, pending
+    report["entries"], report["releasePending"], report["releaseExcluded"] = qualified, pending, older
     report["releaseRecords"] = records
     comparable = report["coverage"]["comparableScopes"] > 0
     known_count = len(qualified) + len(older)

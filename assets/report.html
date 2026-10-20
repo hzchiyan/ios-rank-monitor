@@ -80,7 +80,7 @@ function update(){
   filtered.sort((a,b)=>a.country.localeCompare(b.country)||a.genreId.localeCompare(b.genreId)||
     Math.min(...Object.values(a.ranks).filter(x=>x!==null))-Math.min(...Object.values(b.ranks).filter(x=>x!==null))||a.appId.localeCompare(b.appId));
   const pending=modern.flatMap(r=>r.releasePending||[]).filter(matches);
-  const hasKnown=runs.some(r=>r.counts.confirmedNew!==null);
+  const hasKnown=runs.some(r=>[...r.entries,...(r.releaseExcluded||[])].some(matches));
   $('new-count').textContent=!comparable?'待比较':!hasKnown&&pending.length?'待核实':
     mode==='entrants'?filtered.length:runs.reduce((n,r)=>n+(r.counts.confirmedNew||0),0);
   let notice=mode==='full'?'完整榜单视图：展示选定时点和榜单的已采集前80，上线月份筛选仅适用于新进App。':

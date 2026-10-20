@@ -33,18 +33,25 @@ def count(value):
     return "待比较" if value is None else str(value)
 
 
+def report_count(report, key="confirmedNew"):
+    value = report["counts"][key]
+    if value is not None or not report["run"].get("releasePolicy"):
+        return count(value)
+    chart = key.removesuffix("New") if key in ["freeNew", "grossingNew"] else None
+    comparable = any(s["comparison"] == "comparable" and (chart is None or s["chart"] == chart)
+                     for s in report["coverage"]["scopes"])
+    return "待核实" if comparable else "待比较"
+
+
 def markdown_report(report, config):
     r, coverage = report["run"], report["coverage"]
     policy = r.get("releasePolicy")
-    def total(key):
-        value = report["counts"][key]
-        return "待核实" if policy and value is None and coverage["comparableScopes"] else count(value)
     lines = [f"# iOS 榜单监测 · {clock(r['startedAt'])}", "",
              "[返回日期页](../../index.md) · [返回总览](../../../index.md) · [筛选查看](report.html)", "",
              f"- 运行编号：{r['runId']}；状态：{r['status']}；来源：{r['origin']}",
              f"- 上一任务：{r['previousRunId'] or '无（建立基线）'}；规则版本：{r['ruleVersion']}",
              f"- 完整榜单：{coverage['completeScopes']}/{coverage['plannedScopes']}；可比较：{coverage['comparableScopes']}；待比较：{coverage['unknownScopes']}",
-             f"- 已确认新进：{total('confirmedNew')}；免费榜：{total('freeNew')}；畅销榜：{total('grossingNew')}", "",
+             f"- 已确认新进：{report_count(report, 'confirmedNew')}；免费榜：{report_count(report, 'freeNew')}；畅销榜：{report_count(report, 'grossingNew')}", "",
              "缺数与待比较不等于零；已确认数量仅覆盖可比较范围。前次未在前80内，不代表已知前次具体名次。", ""]
     if policy:
         lines += [f"- 上线准入：七麦最早发布 {policy['windowStarts']['6']} 至 {policy['referenceDate']}（包含边界日）；策略：{policy['version']}",
@@ -106,10 +113,10 @@ def render_all(store):
         lines = [f"# {day} · iOS 榜单监测", "", "[返回总览](../index.md) · [筛选查看](index.html)", "", "| 北京时间 | 状态 | 完整榜单 | 可比较 | 已确认新进 | 报告 |", "|---|---|---:|---:|---:|---|"]
         for r in reversed(runs):
             meta, cov = r["run"], r["coverage"]
-            lines.append(f"| {clock(meta['startedAt'])} | {meta['status']} | {cov['completeScopes']}/{cov['plannedScopes']} | {cov['comparableScopes']} | {count(r['counts']['confirmedNew'])} | [文字](runs/{meta['runId']}/report.md) · [筛选](runs/{meta['runId']}/report.html) |")
+            lines.append(f"| {clock(meta['startedAt'])} | {meta['status']} | {cov['completeScopes']}/{cov['plannedScopes']} | {cov['comparableScopes']} | {report_count(r)} | [文字](runs/{meta['runId']}/report.md) · [筛选](runs/{meta['runId']}/report.html) |")
         write_text(date_path / "index.md", "\n".join(lines) + "\n")
-        overview.append(f"| [{day}]({day}/index.md) | {clock(latest['run']['startedAt'])} | {len(runs)} | {count(latest['counts']['confirmedNew'])} |")
-        archive_links.append(f'<li><a href="{day}/index.html"><strong>{day}</strong><span>{len(runs)} 次采集 · 最近新进 {count(latest["counts"]["confirmedNew"])}</span></a></li>')
+        overview.append(f"| [{day}]({day}/index.md) | {clock(latest['run']['startedAt'])} | {len(runs)} | {report_count(latest)} |")
+        archive_links.append(f'<li><a href="{day}/index.html"><strong>{day}</strong><span>{len(runs)} 次采集 · 最近新进 {report_count(latest)}</span></a></li>')
     write_text(store.base / "index.md", "\n".join(overview) + "\n")
     write_text(store.base / "index.html", '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
                '<title>iOS 榜单监测 · 日期总览</title><style>body{background:#f6f5f0;color:#172f3b;font:16px "PingFang SC",sans-serif;max-width:850px;margin:70px auto;padding:24px}h1{font:40px "Songti SC",serif}small{letter-spacing:3px;color:#426e76}ul{padding:0;list-style:none}li a{color:inherit;text-decoration:none;display:flex;justify-content:space-between;border-top:1px solid #cad4d2;padding:24px 0}span,p{color:#53666c}a:focus{outline:2px solid #167684}</style>'

@@ -295,5 +295,24 @@ class ReleaseTests(helpers.Harness):
         self.assertNotIn('<img src=x',html)
 
 
+    def test_release_unknown_labels_do_not_hide_missing_rank_comparison(self):
+        _, b=self.pair(ids=(81,))
+        self.finish(b)
+        run=self.root/b['relativePath']
+        markdown=(run/'report.md').read_text()
+        self.assertIn('已确认新进：待核实；免费榜：待核实；畅销榜：待比较',markdown)
+        for path in [run.parents[1]/'index.md',self.root/'data/test/index.md',self.root/'data/test/index.html']:
+            self.assertIn('待核实',path.read_text())
+
+    def test_excluded_release_candidates_keep_filter_dimensions_for_known_counts(self):
+        _, b=self.pair(ids=(81,82))
+        self.release(b,81,'2018-01-01')
+        self.finish(b)
+        r=self.result(b)
+        self.assertEqual([e['appId'] for e in r['releaseExcluded']],['81'])
+        self.assertEqual(r['releaseExcluded'][0]['triggers'],['free'])
+        self.assertEqual(r['releaseExcluded'][0]['country'],'us')
+
+
 if __name__ == '__main__':
     unittest.main()
