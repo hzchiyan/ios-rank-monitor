@@ -14,7 +14,7 @@ def import_legacy(store, source):
             raise ValueError("该导入尚未结束；请使用原令牌恢复")
         return {"skipped": True, "runId": run_id, "reason": "该运行编号已导入"}
     started = min((s["capturedAt"] for s in document["snapshots"]), key=parse_time)
-    planned = {scope_key(s): s for s in scopes(store.config)}
+    planned = {scope_key(s): s for s in scopes(store.config, include_inactive=True)}
     normalized, seen = [], set()
     for old in document["snapshots"]:
         genre = old["sourceUrl"].split("/genre/")[-1].split("/")[0]

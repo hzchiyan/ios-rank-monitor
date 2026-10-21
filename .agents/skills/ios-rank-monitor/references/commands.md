@@ -18,6 +18,8 @@ python3 scripts/monitor.py render
 
 `start`返回`runId, token, relativePath, previousRunId, plannedScopes`。
 
+正常采集按scanFamilies生成计划，当前仅应用共144范围；缺少开关的旧配置默认为应用与游戏共240范围。新浏览器轮次manifest记录comparisonVersion=shared_scopes_v1，相邻公共范围的排名规则、设备、前80门槛、时区和分类定义一致时继续比较。旧轮次无该字段时沿用整体指纹规则。运行中变更开关会被配置指纹校验拒绝。import-legacy按完整目录导入，不裁剪旧游戏快照。
+
 ## ingest
 
 将`pending`某scope与浏览器实际结果合并，增加真实`capturedAt`（带时区ISO8601）。scope字段为`country, categoryFamily, category, sourceCategory, genreId, chart, device, sourceUrl`。页面字段为`title, sourceDate, completeTop80, rows`。

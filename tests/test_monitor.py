@@ -20,6 +20,8 @@ class Harness(unittest.TestCase):
         config_path = self.root / "config/monitor.json"
         config = json.loads(config_path.read_text())
         config.pop("releasePolicy", None)
+        # Existing ranking fixtures describe the historical 240-scope configuration.
+        config.pop("scanFamilies", None)
         config_path.write_text(json.dumps(config))
 
     def tearDown(self):

@@ -16,6 +16,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 SCHEMA = 1
+COMPARISON_VERSION = "shared_scopes_v1"
 TERMINAL = {"source_no_data", "failed", "auth_required", "interrupted"}
 
 
@@ -67,25 +68,50 @@ def load_config(root):
         raise ValueError("需要40个互不重复的分类编号")
     if sum(x["family"] == "应用" for x in cats) != 24 or sum(x["family"] == "游戏" for x in cats) != 16:
         raise ValueError("分类应为24个应用分类和16个游戏分类")
+    families = c.get("scanFamilies", ["应用", "游戏"])
+    if (not isinstance(families, list) or not families
+            or any(not isinstance(f, str) or f not in {"应用", "游戏"} for f in families)
+            or len(set(families)) != len(families)):
+        raise ValueError("scanFamilies必须是非空、无重复的应用或游戏大类列表")
     from .releases import policy_for
     policy_for(c, "2026-01-01")
     return c
 
 
 def config_id(config):
-    return digest({k: config[k] for k in ["schemaVersion", "ruleVersion", "timezone", "device", "cutoff", "countries", "charts", "categories"]})
+    value = {k: config[k] for k in ["schemaVersion", "ruleVersion", "timezone", "device", "cutoff", "countries", "charts", "categories"]}
+    if "scanFamilies" in config:
+        value["scanFamilies"] = config["scanFamilies"]
+    return digest(value)
 
 
 def scope_key(scope):
     return ":".join([scope["country"], scope["categoryFamily"], str(scope["genreId"]), scope["chart"]])
 
 
-def scopes(config):
+def scopes(config, *, include_inactive=False):
     return [{"country": country, "categoryFamily": cat["family"], "category": cat["name"],
              "sourceCategory": cat["sourceCategory"], "genreId": cat["genreId"], "chart": chart,
              "device": config["device"],
              "sourceUrl": f"https://www.qimai.cn/rank/index/brand/{chart}/device/iphone/country/{country}/genre/{cat['genreId']}"}
-            for country in config["countries"] for cat in config["categories"] for chart in config["charts"]]
+            for country in config["countries"] for cat in config["categories"]
+            if include_inactive or cat["family"] in config.get("scanFamilies", ["应用", "游戏"])
+            for chart in config["charts"]]
+
+
+def shared_scope_compatible(current, previous, key):
+    """Scope selection can change; the meaning of a compared chart cannot."""
+    fields = ["schemaVersion", "ruleVersion", "timezone", "device", "cutoff"]
+    if current["ruleVersion"] != previous["ruleVersion"] or any(
+            current["config"][f] != previous["config"][f] for f in fields):
+        return False
+    left, right = current["scopes"][key], previous["scopes"].get(key)
+    if not right or any(left[f] != right[f] for f in
+                        ["country", "categoryFamily", "category", "sourceCategory", "genreId", "chart", "device", "sourceUrl"]):
+        return False
+    definitions = [next((c for c in m["config"]["categories"] if c["genreId"] == left["genreId"]), None)
+                   for m in [current, previous]]
+    return definitions[0] is not None and definitions[0] == definitions[1]
 
 
 def source_day(value):
@@ -258,7 +284,10 @@ class Store:
                  "startedAt": stamp(when), "finishedAt": None, "timezone": self.config["timezone"],
                  "codeVersion": version, "ruleVersion": self.config["ruleVersion"],
                  "configFingerprint": config_id(self.config), "config": self.config,
-                 "scopes": {scope_key(s): {**s, "status": "pending"} for s in scopes(self.config)}}
+                 "scopes": {scope_key(s): {**s, "status": "pending"}
+                            for s in scopes(self.config, include_inactive=origin == "legacy_import")}}
+            if origin == "browser":
+                m["comparisonVersion"] = COMPARISON_VERSION
             from .releases import policy_for
             policy = policy_for(self.config, day) if origin == "browser" else None
             if policy:
@@ -397,11 +426,17 @@ class Store:
 
     def _compare_rank(self, run_id):
         m = self.manifest(run_id)
+        version = m.get("comparisonVersion")
+        if version not in [None, COMPARISON_VERSION]:
+            raise ValueError("排名比较版本不受支持，保留数据并停止")
         current = {scope_key(s): s for s in self.snapshots(run_id)}
         previous = {}
         if m["previousRunId"]:
             pm = self.manifest(m["previousRunId"])
-            if pm["configFingerprint"] == m["configFingerprint"]:
+            if version == COMPARISON_VERSION:
+                previous = {scope_key(s): s for s in self.snapshots(pm["runId"])
+                            if scope_key(s) in m["scopes"] and shared_scope_compatible(m, pm, scope_key(s))}
+            elif pm["configFingerprint"] == m["configFingerprint"]:
                 previous = {scope_key(s): s for s in self.snapshots(pm["runId"])}
         entries, comparison = {}, []
         for key, status in m["scopes"].items():

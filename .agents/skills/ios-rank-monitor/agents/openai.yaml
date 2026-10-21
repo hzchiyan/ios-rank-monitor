@@ -1,4 +1,4 @@
 interface:
   display_name: "iOS 榜单监测"
-  short_description: "采集七麦美德日双榜，筛选新进且最近6个月发布的App，生成本地报告"
+  short_description: "采集七麦美德日应用双榜，筛选新进且最近6个月发布的App，生成本地报告"
   default_prompt: "使用 $ios-rank-monitor 执行本仓库的七麦榜单采集与本地报告流程。"
