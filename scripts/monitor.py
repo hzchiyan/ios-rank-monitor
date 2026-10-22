@@ -17,6 +17,12 @@ def main():
     importer = sub.add_parser("import-legacy", help="导入本地旧版快照，不访问网络")
     importer.add_argument("path")
     importer.add_argument("--mode", choices=["formal", "test"], default="formal")
+    sub.add_parser("mail-check", help="离线检查本地邮件配置，不发信")
+    preview = sub.add_parser("mail-preview", help="生成已归档轮次的邮件预览，不发信")
+    preview.add_argument("run_id")
+    preview.add_argument("--mode", choices=["formal", "test"], default="formal")
+    sender = sub.add_parser("mail-send", help="发送指定正式归档轮次的邮件")
+    sender.add_argument("run_id")
     for name in ["doctor", "start", "pending", "resume", "ingest", "mark", "prepare-release", "ingest-release", "finalize", "render"]:
         p = sub.add_parser(name)
         p.add_argument("--mode", choices=["formal", "test"], default=None)
@@ -30,6 +36,17 @@ def main():
             p.add_argument("--input", help="JSON文件；省略时读取标准输入")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
+    if args.command == "mail-check":
+        from rank_monitor.mailer import check_mail
+        return check_mail(root)
+    if args.command in {"mail-preview", "mail-send"}:
+        from rank_monitor.mailer import MailDelivery
+        delivery = MailDelivery(Store(root, getattr(args, "mode", "formal")))
+        if args.command == "mail-preview":
+            return delivery.preview(args.run_id)
+        result = delivery.send(args.run_id)
+        result["_exitCode"] = 1 if result["status"] in {"failed", "partial", "unknown", "busy"} else 0
+        return result
     mode = args.mode
     if mode is None and getattr(args, "run_id", None):
         test = Store(root, "test")
@@ -67,7 +84,10 @@ def main():
 
 if __name__ == "__main__":
     try:
-        print(json.dumps(main(), ensure_ascii=False))
+        result = main()
+        exit_code = result.pop("_exitCode", 0)
+        print(json.dumps(result, ensure_ascii=False))
+        sys.exit(exit_code)
     except (ValueError, KeyError, OSError, json.JSONDecodeError) as error:
         print(json.dumps({"error": str(error)}, ensure_ascii=False))
         sys.exit(1)

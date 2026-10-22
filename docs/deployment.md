@@ -67,3 +67,30 @@ python3 scripts/monitor.py import-legacy /absolute/path/to/old-baseline.json
 - 在目标Mac观察一次真实定时运行，核对账号、工具、权限及文件落点。
 
 本地测试、真实网页样本、目标机定时验收分别记录，不互相替代。目标机尚不可用时，应明确列出待验收项。
+
+## 6. QQ邮件配置与验收
+
+邮件为可选功能。QQ邮箱需在邮箱设置中开启SMTP服务并生成授权码，使用授权码认证，不使用QQ登录密码。[腾讯官方SMTP参数](https://docs.cloudbase.net/authentication-v2/method/email-login)列出QQ的`smtp.qq.com`及SSL端口465；首版只使用SSL/TLS并校验证书。
+
+在目标机仓库根目录准备文件，已有配置不覆盖：
+
+```sh
+mkdir -p .local
+chmod 700 .local
+cp -n config/mail.example.json .local/mail.json
+cp -n config/mail-secrets.example.json .local/mail-secrets.json
+chmod 600 .local/mail-secrets.json
+```
+
+本地编辑`mail.json`：`fromAddress`填完整发件邮箱，`recipients`填目标邮箱字符串数组，`fromName`默认“iOS 榜单监测”，`smtp`默认`host:smtp.qq.com, port:465, security:ssl`；可省略smtp字段以使用这些默认值。可选smtp.username必须与fromAddress相同。首版仅支持ASCII邮箱地址，不接受显示名称或换行。`mail-secrets.json`的`authCode`填QQ生成的授权码。两份文件均不上传；授权码不要发送到聊天，不打印文件内容。填写完成后将`enabled`设为true；禁用时无需有效账号或凭据。
+
+```sh
+python3 scripts/monitor.py mail-check
+python3 scripts/monitor.py mail-preview RUN_ID
+```
+
+`mail-check`返回ready仅表示本地结构和权限通过；disabled/not_configured表示不会发信，不访问SMTP。预览保存到指定归档轮次的`mail/preview.html`和`mail/preview.txt`，先打开HTML核对全部App、七麦详情链接、首次发布区间和数量。测试轮次预览须显式加`--mode test`，不能发信。
+
+再对用户指定的一个正式浏览器归档轮次执行`mail-send RUN_ID`验收，人工确认收件箱中的正文和链接。不为邮件验收启动采集或启用暂停任务。成功状态submitted表示服务器已接受，不保证最终进入收件箱；多个收件人分别发送，失败只补发失败项。unknown表示提交后断线或发送进程中断等结果不明，先人工核对，不删除记录或盲目重发。授权码失效后本地更新，再显式重试failed项；不能将unknown改成failed来绕过保护。
+
+迁移历史时完整复制data会保留冻结正文和发送记录，避免旧邮件重发；迁移发件配置需另外在目标机安全配置本地授权码。更新实际定时任务描述后，必须保留当前暂停状态及其他设置。归档、渲染和导入不会自动发信。

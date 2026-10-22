@@ -1,0 +1,7 @@
+{
+  "enabled": false,
+  "fromAddress": "",
+  "fromName": "iOS 榜单监测",
+  "recipients": [],
+  "smtp": {"host": "smtp.qq.com", "port": 465, "security": "ssl"}
+}

@@ -62,3 +62,24 @@ verified必须校验可见App ID、国家、明确的最早发布标签及与原
 报告展示层将无排名比较依据的数量显示为0，并保留覆盖与待比较说明；report-data.json中的null不改写为0。已有排名候选但日期全部未知时，展示层仍显示待核实。
 
 日期补查次数保存在本轮记录中。prepare-release的pending项包含attempts和attemptsRemaining；首次尝试加最多2次重试，累计用尽后不再返回到pending，exhaustedApps说明仍未核实的耗尽数量。重置或resume不清零，完全相同证据重发不增加次数。正式轮次超时后prepare-release/ingest-release拒绝继续补查，仍可finalize；resume返回deadlineAt与windowExpired，过期立即归档。
+
+## 可选QQ邮件
+
+```sh
+python3 scripts/monitor.py mail-check
+python3 scripts/monitor.py mail-preview RUN_ID
+python3 scripts/monitor.py mail-preview TEST_RUN_ID --mode test
+python3 scripts/monitor.py mail-send RUN_ID
+```
+
+mail-check不创建轮次、不访问SMTP，只检查`.local/mail.json`及权限600的`.local/mail-secrets.json`，返回脱敏地址。enabled默认false；禁用时不要求账号和凭据完整。启用时fromAddress为完整邮箱，recipients为非空邮箱列表；fromName默认“iOS 榜单监测”；smtp可省略，默认host=smtp.qq.com、port=465、security=ssl，username若提供必须等于fromAddress。凭据authCode为QQ SMTP授权码，禁止输出。邮件设置不影响排名配置指纹。
+
+mail-preview接受formal/test的已归档轮次，不发信，返回runId/status/html/text，路径为项目相对路径。mail-send只接受已封存的正式browser轮次；不能自动从测试区推断目标，不能发送legacy_import。调用必须显式指定本轮runId，不遍历历史。
+
+首次发送固化本轮mail/content.json（subject/html/text与内容摘要），发送状态在mail/delivery.json按收件人独立保存。重试、配置变更、模板升级不改变已冻结正文；预览也复用冻结正文。若需要不同内容，不删除发送记录来制造重发。每个收件人是独立的multipart/alternative邮件，只有纯文本和HTML正文，不附文件，不抄送其他收件人。
+
+返回status：not_configured、disabled、busy、submitted、partial、failed或unknown；recipients包含脱敏地址、各自status/reason/skipped；record指向本轮发送记录。submitted只是SMTP服务器已接受，不表示实际收信。已submitted/unknown的收件人跳过；failed可通过再次显式调用重试。进程遗留sending/submitting在下次调用转unknown，禁止自动重发。只有建立连接前的临时网络错误自动重试一次；认证、TLS证书、明确拒收、提交后异常不自动重试。
+
+收件人身份只将域名规范化为小写，保留@前部分的大小写；兼容已有发送记录中的大写域名，重复身份或损坏状态停止发送并提示人工核对。DATA后的畸形回复、本地合成的SMTP异常不能证明拒收，归unknown；只有可信的明确拒收才能记failed。
+
+配置错误返回脱敏error且退出非0；SMTP发送结果partial/failed/unknown/busy退出1，其余退出0。任务既要读取退出码，也要读取JSON状态，邮件异常不能引起重采集、重建替代轮次或破坏归档。finalize/render/import均无SMTP副作用。
