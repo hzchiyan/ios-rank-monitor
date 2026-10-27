@@ -20,6 +20,7 @@
     "17:00"
   ],
   "scanFamilies": ["应用"],
+  "executionPolicy": "completion_v1",
   "categories": [
     {
       "family": "应用",

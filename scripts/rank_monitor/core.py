@@ -17,7 +17,13 @@ from zoneinfo import ZoneInfo
 
 SCHEMA = 1
 COMPARISON_VERSION = "shared_scopes_v1"
+EXECUTION_POLICY = "completion_v1"
+WORKER_LEASE_MINUTES = 15
 TERMINAL = {"source_no_data", "failed", "auth_required", "interrupted"}
+
+
+def completion_driven(manifest):
+    return manifest.get("executionPolicy") == EXECUTION_POLICY
 
 
 def utcnow():
@@ -73,6 +79,10 @@ def load_config(root):
             or any(not isinstance(f, str) or f not in {"应用", "游戏"} for f in families)
             or len(set(families)) != len(families)):
         raise ValueError("scanFamilies必须是非空、无重复的应用或游戏大类列表")
+    if "executionPolicy" in c and c["executionPolicy"] != EXECUTION_POLICY:
+        raise ValueError("执行策略不受支持")
+    if type(c["maxScopeRetries"]) is not int or not 0 <= c["maxScopeRetries"] <= 10:
+        raise ValueError("范围重试次数必须为0至10的整数")
     from .releases import policy_for
     policy_for(c, "2026-01-01")
     return c
@@ -82,6 +92,8 @@ def config_id(config):
     value = {k: config[k] for k in ["schemaVersion", "ruleVersion", "timezone", "device", "cutoff", "countries", "charts", "categories"]}
     if "scanFamilies" in config:
         value["scanFamilies"] = config["scanFamilies"]
+    if "executionPolicy" in config:
+        value["executionPolicy"] = config["executionPolicy"]
     return digest(value)
 
 
@@ -121,7 +133,7 @@ def source_day(value):
     return f"{int(m[1]):04d}-{int(m[2]):02d}-{int(m[3]):02d}"
 
 
-def normalize_snapshot(raw, expected, config, started_at, test=False):
+def normalize_snapshot(raw, expected, config, started_at, test=False, *, fixed_source_day=None):
     s = dict(raw)
     for field in ["country", "categoryFamily", "category", "chart", "device"]:
         if s.get(field) != expected[field]:
@@ -133,9 +145,17 @@ def normalize_snapshot(raw, expected, config, started_at, test=False):
     if u.scheme != "https" or u.hostname != "www.qimai.cn" or u.path.rstrip("/") != wanted.path:
         raise ValueError("来源URL与请求范围不一致")
     at = parse_time(s["capturedAt"])
-    if not parse_time(started_at) <= at <= parse_time(started_at) + timedelta(minutes=config["maxRunMinutes"]):
+    if fixed_source_day is not None:
+        if at < parse_time(started_at):
+            raise ValueError("采集时间早于本轮开始时间")
+        if not test and at > utcnow():
+            raise ValueError("采集时间不能晚于当前时间")
+    elif not parse_time(started_at) <= at <= parse_time(started_at) + timedelta(minutes=config["maxRunMinutes"]):
         raise ValueError("采集时间不在本轮90分钟窗口内")
-    if source_day(s["sourceDate"]) != at.astimezone(ZoneInfo(config["timezone"])).date().isoformat():
+    expected_day = fixed_source_day or at.astimezone(ZoneInfo(config["timezone"])).date().isoformat()
+    if source_day(s["sourceDate"]) != expected_day:
+        if fixed_source_day:
+            raise ValueError("来源日期必须等于本轮固定来源日期；跨天不能混入新一天榜单")
         raise ValueError("来源日期与实际采集日期不一致，请检查是否为旧页面")
     title = s.get("title", "")
     if not test and not all(x in title for x in [config["countries"][expected["country"]], "iPhone", expected["sourceCategory"], config["charts"][expected["chart"]]]):
@@ -222,16 +242,16 @@ class Store:
     def manifest(self, run_id):
         return read_json(self.locate(run_id) / "manifest.json")
 
-    def _authorize(self, run_id, token, restore_active=False, require_window=False):
+    def _authorize(self, run_id, token, restore_active=False, require_window=False, allow_config_change=False):
         p = self.local / "tokens" / run_id
         if not p.exists() or not hmac.compare_digest(p.read_text(), token or ""):
             raise ValueError("运行令牌不匹配；不能修改其他运行")
         m = self.manifest(run_id)
         if m["status"] != "running":
             raise ValueError("运行已结束，原始快照不可修改")
-        if require_window and self.mode != "test" and utcnow() >= parse_time(m["startedAt"]) + timedelta(minutes=m["config"]["maxRunMinutes"]):
+        if require_window and not completion_driven(m) and self.mode != "test" and utcnow() >= parse_time(m["startedAt"]) + timedelta(minutes=m["config"]["maxRunMinutes"]):
             raise ValueError("本轮90分钟窗口已结束，请finalize归档")
-        if m["configFingerprint"] != config_id(self.config):
+        if not allow_config_change and m["configFingerprint"] != config_id(self.config):
             raise ValueError("采集期间配置发生改变，请结束本轮后重新启动")
         if self.state()["latestRunId"] != run_id:
             raise ValueError("只有最新进行中的任务可以写入")
@@ -243,21 +263,85 @@ class Store:
             raise ValueError("运行标记缺失，请先resume恢复最新任务")
         return m
 
+    def _touch(self, run_id):
+        write_json(self.base / "active.json", {"runId": run_id, "leaseUpdatedAt": stamp(utcnow())})
+
+    def _reconcile(self, m):
+        """Recover a checkpoint saved just before the manifest update was interrupted."""
+        snaps = {scope_key(s): s for s in self.snapshots(m["runId"])}
+        if not snaps.keys() <= m["scopes"].keys():
+            raise ValueError("已保存快照超出本轮范围，保留文件并停止")
+        for key, scope in m["scopes"].items():
+            if key in snaps:
+                scope.update(status="complete", capturedAt=snaps[key]["capturedAt"])
+                scope.pop("reason", None)
+            elif scope["status"] == "complete":
+                raise ValueError("完整状态缺少对应快照，需要检查存储，不能归档")
+        write_json(self.locate(m["runId"]) / "manifest.json", m)
+
+    def _work(self, m):
+        limit = m["config"]["maxScopeRetries"] + 1
+        return [{**s, "attemptsRemaining": max(0, limit - s.get("attempts", 0))}
+                for s in m["scopes"].values()
+                if s["status"] not in {"complete", "source_no_data"} and s.get("attempts", 0) < limit]
+
+    def _progress(self, m):
+        from .releases import ReleaseRecords
+        pending = self._work(m)
+        releases = None
+        if not pending and m.get("releasePolicy") and not m.get("blocked"):
+            releases = ReleaseRecords(self).prepare(m)
+        ready = not pending and not m.get("blocked") and not (releases and releases["pending"])
+        return {"runId": m["runId"], "sourceDate": m["date"], "status": m["status"],
+                "phase": "blocked" if m.get("blocked") else "rankings" if pending else "ready" if ready else "releases",
+                "blocked": m.get("blocked"), "canFinalize": ready, "pending": pending,
+                "completedScopes": sum(s["status"] == "complete" for s in m["scopes"].values()),
+                "plannedScopes": len(m["scopes"]), "release": releases}
+
+    def _claim(self, m):
+        token = secrets.token_hex(24)
+        p = self.local / "tokens" / m["runId"]
+        p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        p.write_text(token)
+        p.chmod(0o600)
+        m.pop("blocked", None)
+        self._reconcile(m)
+        self._touch(m["runId"])
+        return {"runId": m["runId"], "token": token, "resumed": True,
+                "relativePath": self.locate(m["runId"]).relative_to(self.root).as_posix(),
+                "previousRunId": m["previousRunId"], "plannedScopes": len(m["scopes"]),
+                "sourceDate": m["date"], "executionPolicy": EXECUTION_POLICY,
+                "leaseExpiresAt": stamp(utcnow() + timedelta(minutes=WORKER_LEASE_MINUTES))}
+
     def start(self, at=None, run_id=None, origin="browser"):
         with self.guard():
             when = parse_time(at) if at else utcnow()
             clock = when if self.mode == "test" and at else utcnow()
             active_path = self.base / "active.json"
             state = self.state()
+            latest = self.manifest(state["latestRunId"]) if state["latestRunId"] else None
+            if origin == "legacy_import" and latest and latest["status"] == "running":
+                raise ValueError("已有采集正在进行，不能导入历史或接管其执行权")
+            if latest and latest["status"] == "running" and completion_driven(latest):
+                if latest["configFingerprint"] != config_id(self.config):
+                    raise ValueError("未结束轮次的配置与当前不同，请先恢复原配置续跑或人工取消")
+                if active_path.exists():
+                    active = read_json(active_path)
+                    if active["runId"] != latest["runId"]:
+                        if self.manifest(active["runId"])["status"] == "running":
+                            raise ValueError("运行标记冲突，保留现场并停止")
+                        active_path.unlink()
+                    elif not latest.get("blocked") and clock < parse_time(active["leaseUpdatedAt"]) + timedelta(minutes=WORKER_LEASE_MINUTES):
+                        return {"skipped": True, "runId": latest["runId"], "reason": "当前轮次执行者仍持有租约，等待其完成", "resumable": True}
+                return self._claim(latest)
             if not active_path.exists() and state["latestRunId"] and self.manifest(state["latestRunId"])["status"] == "running":
                 self._seal(state["latestRunId"], "interrupted")
             if active_path.exists():
                 active = read_json(active_path)
                 active_manifest = self.manifest(active["runId"])
-                deadline = parse_time(active_manifest["startedAt"]) + timedelta(minutes=active_manifest["config"]["maxRunMinutes"])
                 if active_manifest["status"] != "running":
                     active_path.unlink()
-                elif clock < deadline:
+                elif clock < parse_time(active_manifest["startedAt"]) + timedelta(minutes=active_manifest["config"]["maxRunMinutes"]):
                     return {"skipped": True, "runId": active["runId"], "reason": "已有任务进行中"}
                 else:
                     self._seal(active["runId"], "interrupted")
@@ -288,6 +372,8 @@ class Store:
                             for s in scopes(self.config, include_inactive=origin == "legacy_import")}}
             if origin == "browser":
                 m["comparisonVersion"] = COMPARISON_VERSION
+                if self.config.get("executionPolicy") == EXECUTION_POLICY:
+                    m["executionPolicy"] = EXECUTION_POLICY
             from .releases import policy_for
             policy = policy_for(self.config, day) if origin == "browser" else None
             if policy:
@@ -297,16 +383,29 @@ class Store:
             state["latestRunId"] = run_id
             write_json(self.base / "state.json", state)
             write_json(active_path, {"runId": run_id, "leaseUpdatedAt": stamp(utcnow())})
-            return {"runId": run_id, "token": token, "relativePath": relative, "previousRunId": m["previousRunId"], "plannedScopes": len(m["scopes"]),
-                    "deadlineAt": stamp(when + timedelta(minutes=self.config["maxRunMinutes"]))}
+            result = {"runId": run_id, "token": token, "relativePath": relative, "previousRunId": m["previousRunId"], "plannedScopes": len(m["scopes"])}
+            if completion_driven(m):
+                result.update(executionPolicy=EXECUTION_POLICY, sourceDate=day,
+                              leaseExpiresAt=stamp(utcnow() + timedelta(minutes=WORKER_LEASE_MINUTES)))
+            else:
+                result["deadlineAt"] = stamp(when + timedelta(minutes=self.config["maxRunMinutes"]))
+            return result
 
     def pending(self, run_id):
         m = self.manifest(run_id)
+        if completion_driven(m):
+            saved = {scope_key(s) for s in self.snapshots(run_id)}
+            return [s for s in self._work(m) if scope_key(s) not in saved]
         return [s for s in m["scopes"].values() if s["status"] != "complete"]
 
     def resume(self, run_id, token):
         with self.guard():
             m = self._authorize(run_id, token, restore_active=True)
+            if completion_driven(m):
+                m.pop("blocked", None)
+                self._reconcile(m)
+                self._touch(run_id)
+                return self._progress(m)
             write_json(self.base / "active.json", {"runId": run_id, "leaseUpdatedAt": stamp(utcnow())})
             deadline = parse_time(m["startedAt"]) + timedelta(minutes=m["config"]["maxRunMinutes"])
             return {"runId": run_id, "completedScopes": sum(s["status"] == "complete" for s in m["scopes"].values()), "pending": self.pending(run_id),
@@ -318,11 +417,14 @@ class Store:
             key = scope_key(raw)
             if key not in m["scopes"]:
                 raise ValueError("快照不在本轮计划内")
-            snap = normalize_snapshot(raw, m["scopes"][key], self.config, m["startedAt"], self.mode == "test")
+            snap = normalize_snapshot(raw, m["scopes"][key], m["config"], m["startedAt"], self.mode == "test",
+                                      fixed_source_day=m["date"] if completion_driven(m) else None)
             file = self.locate(run_id) / "checkpoints" / (hashlib.sha256(key.encode()).hexdigest() + ".json")
             existing = next((s for s in self.snapshots(run_id) if scope_key(s) == key), None)
             if existing is not None and existing != snap:
                 raise ValueError("该范围已有完整快照；不能用后采数据覆盖")
+            if completion_driven(m) and existing is None and key not in {scope_key(s) for s in self._work(m)}:
+                raise ValueError("该范围已结束或已用完重试次数")
             write_json(file, snap)
             m["scopes"][key].update(status="complete", capturedAt=snap["capturedAt"])
             m["scopes"][key].pop("reason", None)
@@ -330,7 +432,7 @@ class Store:
             write_json(self.base / "active.json", {"runId": run_id, "leaseUpdatedAt": stamp(utcnow())})
             return {"accepted": True, "scope": key, "rows": len(snap["rows"])}
 
-    def mark(self, run_id, token, scope, status, reason):
+    def mark(self, run_id, token, scope, status, reason, *, attempt_id=None, source_date=None):
         if status not in TERMINAL or not reason.strip():
             raise ValueError("范围失败必须提供明确状态和原因")
         with self.guard():
@@ -338,9 +440,51 @@ class Store:
             key = scope_key(scope)
             if key not in m["scopes"] or m["scopes"][key]["status"] == "complete":
                 raise ValueError("范围无效或已存在完整快照")
-            m["scopes"][key].update(status=status, reason=reason[:500])
+            item = m["scopes"][key]
+            if completion_driven(m):
+                if status in {"auth_required", "interrupted"}:
+                    raise ValueError("全局登录或工具受阻请suspend，不能将全部范围标失败归档")
+                if status == "source_no_data":
+                    if source_date != m["date"]:
+                        raise ValueError("缺数证据必须对应本轮固定来源日期")
+                    item["sourceDate"] = source_date
+                else:
+                    if not isinstance(attempt_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", attempt_id):
+                        raise ValueError("每次真实失败须提供唯一attemptId；重发使用原ID")
+                    ids = item.get("attemptIds", [])
+                    if attempt_id in ids:
+                        return {"marked": key, "status": item["status"], "attempts": item["attempts"], "replayed": True}
+                    if item["status"] == "source_no_data" or len(ids) >= m["config"]["maxScopeRetries"] + 1:
+                        raise ValueError("该范围已结束或已用完重试次数")
+                    item.update(attemptIds=[*ids, attempt_id], attempts=len(ids) + 1)
+            item.update(status=status, reason=reason[:500])
             write_json(self.locate(run_id) / "manifest.json", m)
+            self._touch(run_id)
             return {"marked": key, "status": status}
+
+    def progress(self, run_id, token):
+        with self.guard():
+            m = self._authorize(run_id, token, restore_active=True)
+            if not completion_driven(m):
+                raise ValueError("旧轮次不支持完成驱动进度，请使用resume")
+            self._reconcile(m)
+            if not m.get("blocked"):
+                self._touch(run_id)
+            return self._progress(m)
+
+    def suspend(self, run_id, token, reason):
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("暂停续跑必须提供阻塞原因")
+        with self.guard():
+            m = self._authorize(run_id, token, restore_active=True)
+            if not completion_driven(m):
+                raise ValueError("旧轮次不支持suspend")
+            m["blocked"] = m["lastBlock"] = {"reason": reason[:500], "at": stamp(utcnow())}
+            write_json(self.locate(run_id) / "manifest.json", m)
+            active = self.base / "active.json"
+            if active.exists():
+                active.unlink()
+            return {"runId": run_id, "status": "running", "blocked": m["blocked"], "resumable": True}
 
     def prepare_release(self, run_id, token):
         from .releases import ReleaseRecords
@@ -348,7 +492,13 @@ class Store:
             m = self._authorize(run_id, token, require_window=True)
             if not m.get("releasePolicy"):
                 raise ValueError("旧规则运行不补查首次发布日期")
-            return ReleaseRecords(self).prepare(m)
+            if completion_driven(m):
+                self._reconcile(m)
+                if self._work(m):
+                    raise ValueError("榜单仍有可执行项，请先完成榜单采集")
+            result = ReleaseRecords(self).prepare(m)
+            self._touch(run_id)
+            return result
 
     def ingest_release(self, run_id, token, raw):
         from .releases import ReleaseRecords
@@ -356,7 +506,11 @@ class Store:
             m = self._authorize(run_id, token, require_window=True)
             if not m.get("releasePolicy"):
                 raise ValueError("旧规则运行不补查首次发布日期")
-            return ReleaseRecords(self).ingest(m, raw)
+            if completion_driven(m) and self._work(m):
+                raise ValueError("榜单仍有可执行项，请先完成榜单采集")
+            result = ReleaseRecords(self).ingest(m, raw)
+            self._touch(run_id)
+            return result
 
     def snapshots(self, run_id):
         path = self.locate(run_id)
@@ -418,11 +572,28 @@ class Store:
 
     def finalize(self, run_id, token):
         with self.guard():
-            self._authorize(run_id, token)
+            m = self._authorize(run_id, token)
+            if completion_driven(m):
+                self._reconcile(m)
+                if not self._progress(m)["canFinalize"]:
+                    raise ValueError("本轮仍有可执行项或全局阻塞，不能提前归档；请继续采集或suspend等待续跑")
             m = self._seal(run_id)
             # Keep index generation serialized with start/ingest and other renderers.
             self._render()
         return {"runId": run_id, "status": m["status"], "report": (self.locate(run_id) / "report.md").relative_to(self.root).as_posix()}
+
+    def abort(self, run_id, token, reason):
+        """Only for an explicit human cancellation, never an automatic recovery path."""
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("人工取消必须提供原因")
+        with self.guard():
+            m = self._authorize(run_id, token, restore_active=True, allow_config_change=True)
+            m["abortReason"] = reason[:500]
+            m.pop("blocked", None)
+            write_json(self.locate(run_id) / "manifest.json", m)
+            m = self._seal(run_id, "interrupted")
+            self._render()
+            return {"runId": run_id, "status": m["status"], "abortReason": m["abortReason"]}
 
     def _compare_rank(self, run_id):
         m = self.manifest(run_id)

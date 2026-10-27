@@ -4,7 +4,7 @@ from datetime import date, timedelta
 import re
 from urllib.parse import urlparse
 
-from .core import parse_time, read_json, stamp, utcnow, write_json
+from .core import completion_driven, digest, parse_time, read_json, stamp, utcnow, write_json
 
 POLICY_VERSION = "qimai_first_release_6_months_v1"
 LABEL = "最早发布"
@@ -62,9 +62,12 @@ def normalize_evidence(raw, expected, manifest, from_cache=False):
         raise ValueError("上线日期来源URL与App范围不匹配")
     observed = parse_time(raw["observedAt"])
     started = parse_time(manifest["startedAt"])
-    deadline = started + timedelta(minutes=manifest["config"]["maxRunMinutes"])
-    if not from_cache and not started <= observed <= deadline:
-        raise ValueError("发布日期核实时间不在本轮90分钟窗口内")
+    if not from_cache:
+        if completion_driven(manifest):
+            if observed < started:
+                raise ValueError("发布日期核实时间早于本轮开始时间")
+        elif not started <= observed <= started + timedelta(minutes=manifest["config"]["maxRunMinutes"]):
+            raise ValueError("发布日期核实时间不在本轮90分钟窗口内")
     if manifest["mode"] != "test" and observed > utcnow():
         raise ValueError("发布日期核实时间不能晚于当前时间")
     status = raw.get("status")
@@ -177,15 +180,25 @@ class ReleaseRecords:
         path = self.path(manifest["runId"])
         records = read_records(path)
         existing = records.get(key)
-        existing_evidence = {k: v for k, v in (existing or {}).items() if k != "attempts"}
+        existing_evidence = {k: v for k, v in (existing or {}).items() if k not in {"attempts", "attemptHashes"}}
         if existing_evidence == record:
             return {"accepted": True, "app": key, "status": record["status"]}
+        hashes = []
+        if completion_driven(manifest):
+            hashes = (existing or {}).get("attemptHashes", [])
+            if existing and not hashes:
+                hashes = [digest(existing_evidence)]
+            if digest(record) in hashes:
+                # Preserve the latest evidence and budget when any earlier attempt is replayed.
+                return {"accepted": True, "app": key, "status": existing["status"], "replayed": True}
         if existing and existing["status"] == "verified":
             raise ValueError("该App已有已核实的发布日期，不能覆盖")
         attempts = (existing or {}).get("attempts", 0)
         if attempts >= manifest["config"]["maxScopeRetries"] + 1:
             raise ValueError("该App的发布日期补查已用完本轮重试次数")
         record["attempts"] = attempts + 1
+        if completion_driven(manifest):
+            record["attemptHashes"] = [*hashes, digest({k: v for k, v in record.items() if k != "attempts"})]
         records[key] = record
         save_records(path, records)
         if record["status"] == "verified":

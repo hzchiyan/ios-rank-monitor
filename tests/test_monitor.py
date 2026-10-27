@@ -22,6 +22,8 @@ class Harness(unittest.TestCase):
         config.pop("releasePolicy", None)
         # Existing ranking fixtures describe the historical 240-scope configuration.
         config.pop("scanFamilies", None)
+        # Preserve archived lifecycle fixtures; completion-driven runs have their own suite.
+        config.pop("executionPolicy", None)
         config_path.write_text(json.dumps(config))
 
     def tearDown(self):

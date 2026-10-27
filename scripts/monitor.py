@@ -23,15 +23,17 @@ def main():
     preview.add_argument("--mode", choices=["formal", "test"], default="formal")
     sender = sub.add_parser("mail-send", help="发送指定正式归档轮次的邮件")
     sender.add_argument("run_id")
-    for name in ["doctor", "start", "pending", "resume", "ingest", "mark", "prepare-release", "ingest-release", "finalize", "render"]:
+    for name in ["doctor", "start", "pending", "resume", "progress", "suspend", "abort", "ingest", "mark", "prepare-release", "ingest-release", "finalize", "render"]:
         p = sub.add_parser(name)
         p.add_argument("--mode", choices=["formal", "test"], default=None)
-        if name in ["pending", "resume", "ingest", "mark", "prepare-release", "ingest-release", "finalize"]:
+        if name in ["pending", "resume", "progress", "suspend", "abort", "ingest", "mark", "prepare-release", "ingest-release", "finalize"]:
             p.add_argument("run_id")
-        if name in ["resume", "ingest", "mark", "prepare-release", "ingest-release", "finalize"]:
+        if name in ["resume", "progress", "suspend", "abort", "ingest", "mark", "prepare-release", "ingest-release", "finalize"]:
             p.add_argument("--token", required=True)
         if name == "start":
             p.add_argument("--at")
+        if name in ["suspend", "abort"]:
+            p.add_argument("--reason", required=True)
         if name in ["ingest", "mark", "ingest-release"]:
             p.add_argument("--input", help="JSON文件；省略时读取标准输入")
     args = parser.parse_args()
@@ -68,6 +70,10 @@ def main():
         return {"scopes": store.pending(args.run_id)}
     if args.command == "resume":
         return store.resume(args.run_id, args.token)
+    if args.command == "progress":
+        return store.progress(args.run_id, args.token)
+    if args.command in ["suspend", "abort"]:
+        return getattr(store, args.command)(args.run_id, args.token, args.reason)
     if args.command == "prepare-release":
         return store.prepare_release(args.run_id, args.token)
     if args.command in ["ingest", "mark", "ingest-release"]:
@@ -76,7 +82,8 @@ def main():
             return store.ingest(args.run_id, args.token, raw)
         if args.command == "ingest-release":
             return store.ingest_release(args.run_id, args.token, raw)
-        return store.mark(args.run_id, args.token, raw["scope"], raw["status"], raw["reason"])
+        return store.mark(args.run_id, args.token, raw["scope"], raw["status"], raw["reason"],
+                          attempt_id=raw.get("attemptId"), source_date=raw.get("sourceDate"))
     if args.command == "finalize":
         return store.finalize(args.run_id, args.token)
     return store.render()

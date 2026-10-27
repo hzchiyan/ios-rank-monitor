@@ -1,6 +1,6 @@
 # 命令与数据接口
 
-脚本自行定位仓库。默认正式模式，测试加`--mode test`，历史完全分离。TOKEN是本轮控制令牌，不是七麦密码；丢失可直接在本机读取`.local/tokens/RUN_ID`使用，不复制到报告。
+脚本自行定位仓库。默认正式模式，测试加`--mode test`，历史完全分离。TOKEN是本次执行权令牌，不是七麦密码，不复制到报告。start领取/接管时返回令牌并保存在`.local/tokens/RUN_ID`。新执行者必须经start领取，不能直接读取别的执行者令牌抢占；工具重置仍持有本次执行权时可用原令牌resume。
 
 ```sh
 python3 scripts/monitor.py doctor
@@ -8,6 +8,8 @@ python3 scripts/monitor.py start
 python3 scripts/monitor.py start --mode test
 python3 scripts/monitor.py pending RUN_ID
 python3 scripts/monitor.py resume RUN_ID --token TOKEN
+python3 scripts/monitor.py progress RUN_ID --token TOKEN
+python3 scripts/monitor.py suspend RUN_ID --token TOKEN --reason "需要人工验证码"
 python3 scripts/monitor.py ingest RUN_ID --token TOKEN --input data/page.json
 python3 scripts/monitor.py mark RUN_ID --token TOKEN --input data/failure.json
 python3 scripts/monitor.py finalize RUN_ID --token TOKEN
@@ -16,13 +18,17 @@ python3 scripts/monitor.py render
 
 `ingest`/`mark`省略`--input`从标准输入读取JSON。在工具编程环境写JSON，再调用命令，避免把网页文本拼进shell。正式采集使用实际时间；`--at`只用于独立测试，不能用来伪造错过时点。
 
-`start`返回`runId, token, relativePath, previousRunId, plannedScopes`。
+`start`返回`runId, token, relativePath, previousRunId, plannedScopes`。新浏览器轮次记录executionPolicy=completion_v1，额外返回固定sourceDate、leaseExpiresAt，没有deadlineAt。已有未结束新轮时优先恢复同runId：执行者仍有15分钟租约则skipped=true且不返回令牌；租约过期、suspend或标记丢失时接管返回resumed=true并轮换令牌，旧令牌立即失效。租约只控制执行权，绝不封存轮次。过期但尚未被接管时原令牌仍可续约；接管轮换令牌后原令牌不可用。恢复完成后同次触发不再start新轮。
+
+resume恢复保存的快照状态及待办，progress返回phase（rankings/releases/blocked/ready）、pending、completedScopes、plannedScopes、release及canFinalize。保存、resume、progress续租；长浏览器操作前后应在15分钟内主动续约。blocked状态的progress仅检查进度、不恢复执行权，resume或下一次start才恢复。suspend记录blocked/lastBlock，保留running并释放执行权，不消耗各项重试，不归档或发邮件。全局登录、工具、网络受阻应使用它，不能批量失败替代。
+
+pending只列新轮尚可执行的榜单范围，包含attemptsRemaining；完成、明确缺数及重试耗尽项不再列入。每次先完成全部榜单，再执行日期补查；progress会在排名结束后固化可用日期缓存并给出日期pending。还有可执行项或全局阻塞时finalize拒绝归档。只有用户明确取消，才可执行`abort RUN_ID --token TOKEN --reason "用户取消原因"`封存不完整轮次；日常任务不能用abort绕过检查。
 
 正常采集按scanFamilies生成计划，当前仅应用共144范围；缺少开关的旧配置默认为应用与游戏共240范围。新浏览器轮次manifest记录comparisonVersion=shared_scopes_v1，相邻公共范围的排名规则、设备、前80门槛、时区和分类定义一致时继续比较。旧轮次无该字段时沿用整体指纹规则。运行中变更开关会被配置指纹校验拒绝。import-legacy按完整目录导入，不裁剪旧游戏快照。
 
 ## ingest
 
-将`pending`某scope与浏览器实际结果合并，增加真实`capturedAt`（带时区ISO8601）。scope字段为`country, categoryFamily, category, sourceCategory, genreId, chart, device, sourceUrl`。页面字段为`title, sourceDate, completeTop80, rows`。
+将`pending`某scope与浏览器实际结果合并，增加真实`capturedAt`（带时区ISO8601）。新轮次sourceDate必须等于本轮固定来源日；跨天capturedAt可晚于该日但正式采集不能早于startedAt或晚于当前时间。不得将今日榜单改写日期后冒充历史榜单。scope字段为`country, categoryFamily, category, sourceCategory, genreId, chart, device, sourceUrl`。页面字段为`title, sourceDate, completeTop80, rows`。
 
 每行字段：`position`（整数）、`name`、`qimaiUrl`、`developer`、`rating`、`ratingCount`、`latestVersionDate`；可附实际`ranks:[{rank,category}]`用于核对页面分类名次。`qimaiUrl`须为完整`https://www.qimai.cn/app/rank/appid/数字ID/country/国家`。
 
@@ -31,12 +37,14 @@ python3 scripts/monitor.py render
 ## mark
 
 ```json
-{"scope":{"country":"us","categoryFamily":"应用","genreId":"6007","chart":"free"},"status":"source_no_data","reason":"当前日期暂无榜单数据"}
+{"scope":{"country":"us","categoryFamily":"应用","genreId":"6007","chart":"free"},"status":"source_no_data","sourceDate":"2026-10-20","reason":"页面明确2026-10-20暂无榜单数据"}
 ```
 
-状态允许`source_no_data`、`failed`、`auth_required`、`interrupted`。只有网页明确无数据才能用`source_no_data`，空白/加载中不算。原因用不含秘密的简短描述。成功范围不可覆盖，重发相同快照幂等接受。
+新轮允许source_no_data、failed。source_no_data必须传固定来源日及该日明确缺数证据的原因，空白/加载中不算；跨天源站明确不再提供本轮来源日也可记缺失。failed必须提供唯一attemptId（1～100个字母、数字、下划线或连字符），每次真实失败用新ID，重复保存同一次失败使用原ID，不重复计数。初次加maxScopeRetries次重试，次数保存在manifest中，恢复不清零。耗尽后不再执行该项；成功后旧原因清除。成功范围不可覆盖，重发相同快照幂等接受。
 
-登录整体失败时，为未完成范围标`auth_required`再finalize；也可直接finalize，剩余范围按失败封存，但最终说明必须写明登录原因。
+旧生命周期仍接受auth_required、interrupted；新轮全局登录/工具中断必须suspend，不能mark全部范围再强行归档。
+
+例如单项失败：`{"scope":{"country":"us","categoryFamily":"应用","genreId":"6007","chart":"free"},"status":"failed","attemptId":"scope-6007-free-1","reason":"该范围DOM解析失败"}`。
 
 ## 首次发布日期补查（新规则轮次）
 
@@ -45,7 +53,7 @@ python3 scripts/monitor.py prepare-release RUN_ID --token TOKEN
 python3 scripts/monitor.py ingest-release RUN_ID --token TOKEN --input data/release.json
 ```
 
-`start`额外返回固定`deadlineAt`。新轮次manifest保存独立`releasePolicy`、北京时间参考日和1～6个月起始日期；排名比较版本及指纹不因上线筛选改变。旧轮次和legacy_import保留原规则，不能调用日期补查接口。
+新轮没有总时限；跨天排名来源日及上线准入参考日均不改变，日期核实继续。新轮次manifest保存独立`releasePolicy`、北京时间参考日和1～6个月起始日期；排名比较版本及指纹不因上线筛选改变。旧轮次和legacy_import保留原规则，不能调用日期补查接口。
 
 `prepare-release`在排名候选中按国家＋App ID去重，将已核实缓存固化到本轮`releases.json`，返回`pending`（country/appId/name/sourceUrl）、`candidateApps`和`verifiedApps`。允许重复调用；无候选则pending为空，不额外访问网页。
 
@@ -55,13 +63,13 @@ python3 scripts/monitor.py ingest-release RUN_ID --token TOKEN --input data/rele
 {"country":"us","appId":"123","pageAppId":"123","pageCountry":"美国","status":"verified","releaseDate":"2026-10-01","sourceUrl":"https://www.qimai.cn/app/rank/appid/123/country/us","sourceLabel":"最早发布","rawText":"最早发布 2026-10-01","observedAt":"2026-10-20T04:10:00Z"}
 ```
 
-verified必须校验可见App ID、国家、明确的最早发布标签及与原文一致的合法日期。状态也支持unavailable、failed，此时releaseDate为空并必须有reason。晚于本轮参考日的日期会转为待核实，不能作为近期发布入选。来源URL须与候选App ID、国家一致；核实时间须位于本轮窗口。相同证据幂等接受；同轮已核实证据不能静默覆盖，结束后不可写入。
+verified必须校验可见App ID、国家、明确的最早发布标签及与原文一致的合法日期。状态也支持unavailable、failed，此时releaseDate为空并必须有reason。晚于本轮参考日的日期会转为待核实，不能作为近期发布入选。来源URL须与候选App ID、国家一致；新轮核实时间须不早于startedAt，正式核实不得晚于当前时间；不限制为90分钟或同一天。缓存保留原核实时间。相同证据幂等接受；同轮已核实证据不能静默覆盖，结束后不可写入。
 
-`finalize`会固化尚未核实的候选，日期不完整时将新规则轮次记为partial；排名覆盖数不因此减少。新报告counts增加rankCandidates、excludedOlder、pendingRelease；entries只含近6个自然月的已核实候选，releasePending单列未知记录。所有候选都未核实时confirmedNew为null，零排名候选且有可比较范围时为0。重建仅使用每轮固化证据，不用后来缓存回写历史。
+新轮finalize仅在没有可执行项时允许；日期不完整时将新规则轮次记为partial；排名覆盖数不因此减少。新报告counts增加rankCandidates、excludedOlder、pendingRelease；entries只含近6个自然月的已核实候选，releasePending单列未知记录。所有候选都未核实时confirmedNew为null，零排名候选且有可比较范围时为0。重建仅使用每轮固化证据，不用后来缓存回写历史。
 
 报告展示层将无排名比较依据的数量显示为0，并保留覆盖与待比较说明；report-data.json中的null不改写为0。已有排名候选但日期全部未知时，展示层仍显示待核实。
 
-日期补查次数保存在本轮记录中。prepare-release的pending项包含attempts和attemptsRemaining；首次尝试加最多2次重试，累计用尽后不再返回到pending，exhaustedApps说明仍未核实的耗尽数量。重置或resume不清零，完全相同证据重发不增加次数。正式轮次超时后prepare-release/ingest-release拒绝继续补查，仍可finalize；resume返回deadlineAt与windowExpired，过期立即归档。
+日期补查次数保存在本轮记录中。prepare-release的pending项包含attempts和attemptsRemaining；首次尝试加最多2次重试，累计用尽后不再返回到pending，exhaustedApps说明仍未核实的耗尽数量。重置或resume不清零；新轮持久化全部尝试的证据摘要，A、B保存后再重发A也不增加次数或覆盖最新证据。新轮prepare-release/ingest-release不受90分钟限制。无executionPolicy的旧轮次仍保留deadlineAt/windowExpired及旧窗口校验，重建历史不切换策略；旧版导入不启用新执行策略。
 
 ## 可选QQ邮件
 
