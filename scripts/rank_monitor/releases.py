@@ -7,13 +7,15 @@ from urllib.parse import urlparse
 from .core import completion_driven, digest, parse_time, read_json, stamp, utcnow, write_json
 
 POLICY_VERSION = "qimai_first_release_6_months_v1"
+YEAR_POLICY_VERSION = "qimai_first_release_12_months_v1"
+POLICY_MONTHS = {POLICY_VERSION: 6, YEAR_POLICY_VERSION: 12}
 LABEL = "最早发布"
 EVIDENCE_VERSION = 1
 
 
 def month_cutoff(reference, months):
-    if type(months) is not int or not 1 <= months <= 6:
-        raise ValueError("上线筛选月份必须为1至6")
+    if type(months) is not int or not 1 <= months <= 12:
+        raise ValueError("上线筛选月份必须为1至12")
     year, month = divmod(reference.year * 12 + reference.month - 1 - months, 12)
     month += 1
     return date(year, month, min(reference.day, monthrange(year, month)[1]))
@@ -29,11 +31,14 @@ def policy_for(config, reference_day):
     setting = config.get("releasePolicy")
     if setting is None:
         return None
-    if setting != {"version": POLICY_VERSION, "months": 6, "sourceLabel": LABEL}:
+    version = setting.get("version") if isinstance(setting, dict) else None
+    if (not isinstance(version, str) or version not in POLICY_MONTHS
+            or type(setting.get("months")) is not int
+            or setting != {"version": version, "months": POLICY_MONTHS[version], "sourceLabel": LABEL}):
         raise ValueError("上线准入策略不受支持")
     reference = release_date(reference_day)
     return {**setting, "referenceDate": reference.isoformat(),
-            "windowStarts": {str(n): month_cutoff(reference, n).isoformat() for n in range(1, 7)}}
+            "windowStarts": {str(n): month_cutoff(reference, n).isoformat() for n in range(1, setting["months"]+1)}}
 
 
 def release_key(entry):
@@ -103,7 +108,7 @@ def normalize_evidence(raw, expected, manifest, from_cache=False):
 def apply_admission(report, manifest, records):
     """Filter only rank candidates; rank coverage and archived top80 stay intact."""
     policy = manifest["releasePolicy"]
-    cutoff, reference = policy["windowStarts"]["6"], policy["referenceDate"]
+    cutoff, reference = policy["windowStarts"][str(policy["months"])], policy["referenceDate"]
     candidates, qualified, pending, older = report["entries"], [], [], []
     for entry in candidates:
         record = records.get(release_key(entry), {})

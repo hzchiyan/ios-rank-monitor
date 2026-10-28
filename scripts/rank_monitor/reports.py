@@ -65,6 +65,10 @@ def entry_baselines(entry, config):
                     for chart, baseline in sorted(entry.get("comparisonBaselines", {}).items()))
 
 
+def release_period(policy):
+    return "一年" if policy["months"] == 12 else "六个月"
+
+
 def markdown_report(report, config):
     r, coverage = report["run"], report["coverage"]
     policy = r.get("releasePolicy")
@@ -80,8 +84,8 @@ def markdown_report(report, config):
         lines += [f"- 比较口径：每榜单最近有效完整快照，无回溯期限；回溯比较 {coverage['fallbackScopes']}；无历史基准 {coverage['noBaselineScopes']}；本轮缺数 {coverage['currentMissingScopes']}",
                   "上一任务仅表示执行顺序，各榜单实际基准见下表。仅比较两个观测端点，不能推断中间变化或首次进榜时间。", ""]
     if policy:
-        lines += [f"- 上线准入：七麦最早发布 {policy['windowStarts']['6']} 至 {policy['referenceDate']}（包含边界日）；策略：{policy['version']}",
-                  f"- 排名候选：{count(report['counts']['rankCandidates'])}；超过六个月排除：{count(report['counts']['excludedOlder'])}；首次发布日期待核实：{count(report['counts']['pendingRelease'])}", ""]
+        lines += [f"- 上线准入：七麦最早发布 {policy['windowStarts'][str(policy['months'])]} 至 {policy['referenceDate']}（包含边界日）；策略：{policy['version']}",
+                  f"- 排名候选：{count(report['counts']['rankCandidates'])}；超过{release_period(policy)}排除：{count(report['counts']['excludedOlder'])}；首次发布日期待核实：{count(report['counts']['pendingRelease'])}", ""]
     grouped = defaultdict(list)
     for e in report["entries"]:
         grouped[(e["categoryFamily"], e["category"], e["country"])].append(e)

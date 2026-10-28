@@ -26,6 +26,23 @@ const data=JSON.parse(payload),context={
   location:{hash:'#run='+data.runs.at(-1).run.runId,assign(){throw Error('Unexpected navigation');}}
 };
 vm.runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],context);
+if(process.argv[3]==='release-year'){
+  const months=get('release-months'),old=data.runs.find(r=>r.run.releasePolicy?.months===6&&r.entries.length);
+  const current=data.runs.at(-1).run.runId;
+  assert.equal(months.value,'12');assert.equal(months.options.length,12);assert(!months.disabled);
+  assert.equal(get('new-count').textContent,'3');assert(get('rows').textContent.includes('Synthetic 86'));
+  months.value='9';months.onchange();assert.equal(get('new-count').textContent,'2');
+  months.value='6';months.onchange();assert.equal(get('new-count').textContent,'1');
+  get('country').value='us';get('country').onchange();assert.equal(months.value,'6');
+  get('run').value=old.run.runId;get('run').onchange();assert.equal(months.value,'6');assert.equal(months.options.length,6);
+  get('run').value=current;get('run').onchange();assert.equal(months.value,'12');assert.equal(get('new-count').textContent,'3');
+  get('run').value='all';get('run').onchange();assert(months.disabled);assert.equal(get('new-count').textContent,'4');
+  assert(get('notice').textContent.includes('不同上线准入周期'));
+  get('run').value=current;get('run').onchange();months.value='1';months.onchange();assert.equal(get('new-count').textContent,'0');
+  get('full').onclick();assert(months.disabled);assert.equal(get('rows').children.length,80);
+  get('entrants').onclick();get('reset').onclick();assert.equal(months.value,'12');
+  process.stdout.write('one-year release UI passed\n');
+}else{
 assert.equal(get('rows').children.length,80);assert.equal(get('new-count').textContent,'160');
 assert.equal(get('page').textContent,'1 / 2');get('next').onclick();assert.equal(get('page').textContent,'2 / 2');
 get('chart').value='free';get('chart').onchange();assert.equal(get('new-count').textContent,'80');
@@ -37,3 +54,4 @@ get('reset').onclick();assert.equal(get('new-count').textContent,'160');
 get('full').onclick();assert.equal(get('rows').children.length,80);assert(get('release-months').disabled);
 assert(get('rows').textContent.includes('完整榜单视图不作新进判断'));
 process.stdout.write('pagination, chart/country/search filters, intervals and full view passed\n');
+}

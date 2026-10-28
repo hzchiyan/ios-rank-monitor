@@ -15,7 +15,7 @@ import ssl
 import stat
 
 from .core import digest, read_json, stamp, utcnow, write_json
-from .reports import clock, count, entry_baselines, report_count, write_text
+from .reports import clock, count, entry_baselines, release_period, report_count, write_text
 
 
 class MailError(ValueError):
@@ -111,7 +111,7 @@ def render_mail(report, config):
     confirmed = report_count(report)
     subject = f"iOS 榜单监测｜{started}｜{status}｜入选{confirmed}"
     release = run.get('releasePolicy')
-    policy_text = (f"上线准入：七麦最早发布 {release['windowStarts']['6']} 至 {release['referenceDate']}（包含边界日）。"
+    policy_text = (f"上线准入：七麦最早发布 {release['windowStarts'][str(release['months'])]} 至 {release['referenceDate']}（包含边界日）。"
                    if release else '本轮为历史规则，未采集首次发布日期。')
     summary = [('已确认入选', confirmed), ('免费榜入选', report_count(report, 'freeNew')),
                ('畅销榜入选', report_count(report, 'grossingNew')),
@@ -124,7 +124,7 @@ def render_mail(report, config):
                     ('本轮缺数', str(coverage['currentMissingScopes']))]
     if release:
         summary += [('排名候选', count(counts.get('rankCandidates'))),
-                    ('超过六个月排除', count(counts.get('excludedOlder'))),
+                    ('超过'+release_period(release)+'排除', count(counts.get('excludedOlder'))),
                     ('首次发布日期待核实', count(counts.get('pendingRelease')))]
     notice = ('首次轮次建立基线；无排名比较依据时数量显示0，不表示已确认没有新进。'
               if not run.get('previousRunId') else '已确认数量仅覆盖可比较范围，缺数及待比较不等于确认没有新进。')

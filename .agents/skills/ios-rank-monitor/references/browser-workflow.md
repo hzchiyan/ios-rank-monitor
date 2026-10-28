@@ -41,7 +41,7 @@ DOM改变则记录解析失败；日常任务不自行改解析代码。维护�
 2. 通过文档允许的只读evaluate执行`assets/read-qimai-release.js`完整表达式。当前适配依据：`.app-header .new-item`中`.type`文字恰为“最早发布”，日期取该项`.value`；App ID取`.i-id .new-value`，国家取头部可见的`.ivu-dropdown-rel .icon-flag`所属文字。只读可见DOM，不读框架状态或私有接口。
 3. 在工具编程环境合并pending项、实际页面结果和真实当前UTC `observedAt`，实际页面字段覆盖计划字段，立即`ingest-release`。读到有效日期才用verified；标签缺失/日期不可识别用unavailable并写原因，单项导航失败用failed；整体登录/网络失败suspend。不能退回“最近更新”“版本日期”或猜测日期。
 4. 初次加最多2次重试，次数由本轮证据持久化；用尽后保留待核实，不能冒充已核实或已排除。工具/登录整体失败suspend等待恢复，不封存；新轮次completion_v1的日期补查可跨天继续，没有90分钟截止；历史无executionPolicy仍按旧生命周期。
-5. 同轮恢复用resume、prepare-release重新取得待核实清单。结果由程序按本轮固定参考日判断；六个月以外排除，晚于参考日或未知单列。不要让日期过滤删掉原始前80，也不要为旧轮次补查。
+5. 同轮恢复用resume、prepare-release重新取得待核实清单。结果由程序按本轮固定参考日判断；超过本轮固化准入区间则排除（当前新轮为12个自然月、旧半年轮仍为6个月），晚于参考日或未知单列。不要让日期过滤删掉原始前80，也不要为旧轮次补查。
 
 ## 逐榜单比较基准
 

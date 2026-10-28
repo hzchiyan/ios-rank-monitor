@@ -7,16 +7,16 @@
 <body><header><div class="eyebrow">APP SIGNALS / LOCAL RESEARCH</div><div class="headrow"><div><h1>iOS 榜单监测 <span id="date-title">__DATE__</span></h1><p class="subtitle">美国 · 德国 · 日本 / 分类榜单 / 北京时间</p></div><nav><a href="../index.html">日期总览</a><a href="index.md">Markdown 报告</a><label>切换日期<select id="date" aria-label="日期"></select></label></nav></div></header>
 <main><div class="stats"><div class="stat"><b id="new-count">—</b><span>已确认入选记录</span></div><div class="stat"><b id="complete-count">—</b><span>完整榜单 / 计划范围</span></div><div class="stat"><b id="comparable-count">—</b><span>可比较范围 / 计划范围</span></div></div>
 <div class="toolbar"><button id="entrants" class="active">新进 App</button><button id="full">完整榜单</button></div>
-<div class="filters"><label>采集时点<select id="run" aria-label="采集时点"></select></label><label>国家<select id="country" aria-label="国家"><option value="">全部国家</option></select></label><label>大类<select id="family" aria-label="大类"><option value="">全部大类</option></select></label><label>分类<select id="category" aria-label="分类"></select></label><label>榜单<select id="chart" aria-label="榜单"><option value="">全部触发榜单</option><option value="free">免费榜</option><option value="grossing">畅销榜</option></select></label><label>最早发布<select id="release-months" aria-label="最早发布"><option value="6">最近6个月</option><option value="5">最近5个月</option><option value="4">最近4个月</option><option value="3">最近3个月</option><option value="2">最近2个月</option><option value="1">最近1个月</option></select></label><label>搜索名称 / 开发者 / ID<input id="search" type="search" placeholder="搜索 App" aria-label="搜索 App"></label><button id="reset">重置</button></div>
+<div class="filters"><label>采集时点<select id="run" aria-label="采集时点"></select></label><label>国家<select id="country" aria-label="国家"><option value="">全部国家</option></select></label><label>大类<select id="family" aria-label="大类"><option value="">全部大类</option></select></label><label>分类<select id="category" aria-label="分类"></select></label><label>榜单<select id="chart" aria-label="榜单"><option value="">全部触发榜单</option><option value="free">免费榜</option><option value="grossing">畅销榜</option></select></label><label>最早发布<select id="release-months" aria-label="最早发布"><option value="12">最近12个月</option><option value="11">最近11个月</option><option value="10">最近10个月</option><option value="9">最近9个月</option><option value="8">最近8个月</option><option value="7">最近7个月</option><option value="6">最近6个月</option><option value="5">最近5个月</option><option value="4">最近4个月</option><option value="3">最近3个月</option><option value="2">最近2个月</option><option value="1">最近1个月</option></select></label><label>搜索名称 / 开发者 / ID<input id="search" type="search" placeholder="搜索 App" aria-label="搜索 App"></label><button id="reset">重置</button></div>
 <div id="notice" role="status"></div><div class="tablewrap" role="region" aria-label="榜单列表，可滚动" tabindex="0"><table><thead><tr><th>APP / 开发者</th><th>国家 / 分类</th><th>免费榜</th><th>畅销榜</th><th>触发 / 视图</th><th>评分 / 数量</th><th>最早发布</th><th>版本日期</th><th>采集时间</th><th>比较基准 / 实际跨度</th></tr></thead><tbody id="rows"></tbody></table><div id="empty" class="empty" hidden>没有匹配记录。可调整筛选条件；待比较和首次发布日期待核实不代表已确认没有新进。</div></div>
 <div class="pager"><span id="result-count"></span><div><button id="prev">上一页</button> <span id="page"></span> <button id="next">下一页</button></div></div>
 <details id="release-pending-panel" hidden><summary>首次发布日期待核实（<span id="pending-count">0</span>）</summary><div id="release-pending"></div></details>
-<details><summary>数据覆盖、比较依据与异常</summary><div id="coverage"></div></details><footer>新规则：免费榜或畅销榜新进前80，且七麦最早发布在本轮参考日最近6个自然月内。历史运行保留原规则。新轮次每榜单与最近有效完整快照比较，不设回溯期限并标明实际跨度；历史轮次保留原比较口径。<br>榜单在一段时间内逐项采集，各项以实际采集时间为准。数据和报告仅保存在本机。</footer></main>
+<details><summary>数据覆盖、比较依据与异常</summary><div id="coverage"></div></details><footer>新规则：免费榜或畅销榜新进前80，且七麦最早发布在本轮参考日最近12个自然月内（一年）。历史运行保留各轮原准入月份。新轮次每榜单与最近有效完整快照比较，不设回溯期限并标明实际跨度；历史轮次保留原比较口径。<br>榜单在一段时间内逐项采集，各项以实际采集时间为准。数据和报告仅保存在本机。</footer></main>
 <script id="payload" type="application/json">__PAYLOAD__</script>
 <script>
 'use strict';
 const data=JSON.parse(document.getElementById('payload').textContent),$=id=>document.getElementById(id),cfg=data.config;
-let mode='entrants',page=0,filtered=[];const size=80;
+let mode='entrants',page=0,filtered=[],releaseRangeKey=null;const size=80;
 const when=t=>new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(t));
 const add=(el,value,label)=>el.add(new Option(label,value));
 for(const d of data.dates)add($('date'),d,d);$('date').value=data.date;
@@ -81,12 +81,23 @@ function draw(){
   $('result-count').textContent='匹配 '+filtered.length+' 条记录'+(mode==='entrants'?' · 同一App在不同采集时点分别保留':'');
   $('prev').disabled=page===0;$('next').disabled=page>=pages-1;$('empty').hidden=filtered.length>0;body.closest('.tablewrap').scrollTop=0;
 }
+function releaseOptions(runs){
+  const modern=runs.filter(r=>r.run.releasePolicy),first=modern[0]?.run.releasePolicy;
+  const same=modern.length===runs.length&&modern.length>0&&modern.every(r=>r.run.releasePolicy.version===first.version&&r.run.releasePolicy.months===first.months);
+  const max=same?first.months:12,key=same?first.version+':'+max:modern.length?'mixed':'legacy';
+  if(key!==releaseRangeKey){
+    $('release-months').replaceChildren();
+    for(let n=max;n>=1;n--)add($('release-months'),String(n),'最近'+n+'个月');
+    $('release-months').value=String(max);releaseRangeKey=key;
+  }
+  const enabled=mode==='entrants'&&same;$('release-months').disabled=!enabled;
+  return {modern,same,max,enabled};
+}
 function update(){
   categories();
   page=0;const runs=selected(),complete=runs.reduce((n,r)=>n+r.coverage.completeScopes,0),
     total=runs.reduce((n,r)=>n+r.coverage.plannedScopes,0),comparable=runs.reduce((n,r)=>n+r.coverage.comparableScopes,0);
-  const modern=runs.filter(r=>r.run.releasePolicy),releaseEnabled=mode==='entrants'&&runs.length>0&&modern.length===runs.length;
-  $('release-months').disabled=!releaseEnabled;
+  const releaseState=releaseOptions(runs),modern=releaseState.modern,releaseEnabled=releaseState.enabled;
   $('complete-count').textContent=complete+' / '+total;$('comparable-count').textContent=comparable+' / '+total;
   let records=[];
   for(const r of runs){
@@ -113,9 +124,11 @@ function update(){
     const latest=runs.filter(r=>r.run.comparisonVersion==='latest_valid_scope_v1');
     if(latest.length)notice+=' 最近有效完整快照比较，不设回溯期限；回溯比较 '+latest.reduce((n,r)=>n+r.coverage.fallbackScopes,0)+' 个范围，无历史基准 '+latest.reduce((n,r)=>n+r.coverage.noBaselineScopes,0)+' 个，本轮缺数 '+latest.reduce((n,r)=>n+r.coverage.currentMissingScopes,0)+' 个。各榜单实际跨度分别列出，仅表示两个观测端点的差异。';
     if(!modern.length)notice+=' 历史运行未采集最早发布日期，保留原筛选结果，不能按上线月份筛选。';
-    else if(!releaseEnabled)notice+=' 所选时点混合新旧规则，保留各轮原口径；请选择新规则时点后使用上线月份筛选。';
+    else if(modern.length!==runs.length)notice+=' 所选时点混合新旧规则，保留各轮原口径；请选择新规则时点后使用上线月份筛选。';
+    else if(!releaseState.same)notice+=' 所选时点混合不同上线准入周期，保留各轮原结果；请选择相同周期时点后使用上线月份筛选。';
     else notice+=` 按各轮开始时的北京时间日期回溯${$('release-months').value}个自然月，包含边界日。`;
-    if(modern.length)notice+=` 新规则排名候选 ${modern.reduce((n,r)=>n+(r.counts.rankCandidates||0),0)} 条，超过六个月排除 ${modern.reduce((n,r)=>n+(r.counts.excludedOlder||0),0)} 条；当前筛选下首次发布日期待核实 ${pending.length} 条，未计入主列表。`;
+    const excludedLabel=releaseState.same?(releaseState.max===12?'超过一年排除':'超过六个月排除'):'超出各轮准入范围排除';
+    if(modern.length)notice+=` 新规则排名候选 ${modern.reduce((n,r)=>n+(r.counts.rankCandidates||0),0)} 条，${excludedLabel} ${modern.reduce((n,r)=>n+(r.counts.excludedOlder||0),0)} 条；当前筛选下首次发布日期待核实 ${pending.length} 条，未计入主列表。`;
   }
   $('notice').textContent=notice;
   $('release-pending').replaceChildren();$('release-pending-panel').hidden=!pending.length||mode!=='entrants';
@@ -142,7 +155,7 @@ $('date').onchange=()=>location.assign('../'+$('date').value+'/index.html');$('e
 for(const id of ['run','country','category','release-months'])$(id).onchange=update;
 $('chart').onchange=()=>{if(mode==='full'&&!$('chart').value)$('chart').value='free';update();};
 $('family').onchange=update;$('search').oninput=update;
-$('reset').onclick=()=>{for(const id of ['country','family','category','chart','search'])$(id).value='';$('release-months').value='6';view('entrants');runOptions();update();};
+$('reset').onclick=()=>{for(const id of ['country','family','category','chart','search'])$(id).value='';releaseRangeKey=null;view('entrants');runOptions();update();};
 $('prev').onclick=()=>{page--;draw();};$('next').onclick=()=>{page++;draw();};
 runOptions(new URLSearchParams(location.hash.slice(1)).get('run'));update();
 </script></body></html>

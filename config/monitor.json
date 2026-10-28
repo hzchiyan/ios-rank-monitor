@@ -267,8 +267,8 @@
   "maxScopeRetries": 2,
   "maxRunMinutes": 90,
   "releasePolicy": {
-    "version": "qimai_first_release_6_months_v1",
-    "months": 6,
+    "version": "qimai_first_release_12_months_v1",
+    "months": 12,
     "sourceLabel": "最早发布"
   }
 }

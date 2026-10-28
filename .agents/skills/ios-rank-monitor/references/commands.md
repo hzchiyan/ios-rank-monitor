@@ -57,7 +57,7 @@ python3 scripts/monitor.py prepare-release RUN_ID --token TOKEN
 python3 scripts/monitor.py ingest-release RUN_ID --token TOKEN --input data/release.json
 ```
 
-新轮没有总时限；跨天排名来源日及上线准入参考日均不改变，日期核实继续。新轮次manifest保存独立`releasePolicy`、北京时间参考日和1～6个月起始日期；排名比较版本及指纹不因上线筛选改变。旧轮次和legacy_import保留原规则，不能调用日期补查接口。
+新轮没有总时限；跨天排名来源日及上线准入参考日均不改变，日期核实继续。新轮次manifest保存独立`releasePolicy`、北京时间参考日和1～12个月起始日期；当前版本qimai_first_release_12_months_v1/月份12，旧qimai_first_release_6_months_v1仍生成1～6个月界限；排名比较版本及指纹不因上线筛选改变。旧轮次和legacy_import保留原规则，不能调用日期补查接口。
 
 `prepare-release`在排名候选中按国家＋App ID去重，将已核实缓存固化到本轮`releases.json`，返回`pending`（country/appId/name/sourceUrl）、`candidateApps`和`verifiedApps`。允许重复调用；无候选则pending为空，不额外访问网页。
 
@@ -69,11 +69,13 @@ python3 scripts/monitor.py ingest-release RUN_ID --token TOKEN --input data/rele
 
 verified必须校验可见App ID、国家、明确的最早发布标签及与原文一致的合法日期。状态也支持unavailable、failed，此时releaseDate为空并必须有reason。晚于本轮参考日的日期会转为待核实，不能作为近期发布入选。来源URL须与候选App ID、国家一致；新轮核实时间须不早于startedAt，正式核实不得晚于当前时间；不限制为90分钟或同一天。缓存保留原核实时间。相同证据幂等接受；同轮已核实证据不能静默覆盖，结束后不可写入。
 
-新轮finalize仅在没有可执行项时允许；日期不完整时将新规则轮次记为partial；排名覆盖数不因此减少。新报告counts增加rankCandidates、excludedOlder、pendingRelease；entries只含近6个自然月的已核实候选，releasePending单列未知记录。所有候选都未核实时confirmedNew为null，零排名候选且有可比较范围时为0。重建仅使用每轮固化证据，不用后来缓存回写历史。
+新轮finalize仅在没有可执行项时允许；日期不完整时将新规则轮次记为partial；排名覆盖数不因此减少。新报告counts增加rankCandidates、excludedOlder、pendingRelease；entries只含本轮准入区间内的已核实候选（当前一年即12个自然月，旧半年轮仍6个月），releasePending单列未知记录。所有候选都未核实时confirmedNew为null，零排名候选且有可比较范围时为0。重建仅使用每轮固化证据，不用后来缓存回写历史。
 
 报告展示层将无排名比较依据的数量显示为0，并保留覆盖与待比较说明；report-data.json中的null不改写为0。已有排名候选但日期全部未知时，展示层仍显示待核实。
 
 日期补查次数保存在本轮记录中。prepare-release的pending项包含attempts和attemptsRemaining；首次尝试加最多2次重试，累计用尽后不再返回到pending，exhaustedApps说明仍未核实的耗尽数量。重置或resume不清零；新轮持久化全部尝试的证据摘要，A、B保存后再重发A也不增加次数或覆盖最新证据。新轮prepare-release/ingest-release不受90分钟限制。无executionPolicy的旧轮次仍保留deadlineAt/windowExpired及旧窗口校验，重建历史不切换策略；旧版导入不启用新执行策略。
+
+页面一年轮默认12个月并提供1～12，半年轮默认6并提供1～6；切换准入周期重设最大月份，同周期内保留选择。混合不同准入周期或无日期规则时禁用月份筛选，保留每轮封存结果。完整榜单不作月份筛选。准入和报告/邮件的排除区间均读取本轮releasePolicy.months，不按当前配置或打开页面当天改写历史。
 
 ## 历史报告保护
 

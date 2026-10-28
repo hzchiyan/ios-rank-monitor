@@ -191,7 +191,8 @@ class MailTests(helpers.Harness):
         rendered = self.mailer().render_mail(report, store.config)
         self.assertIn('建立基线', rendered['text'])
         self.assertIn('已确认入选：0', rendered['text'])
-        report['run']['releasePolicy'] = {'windowStarts': {'6': '2026-04-20'}, 'referenceDate': '2026-10-20'}
+        report['run']['releasePolicy'] = {'version': 'qimai_first_release_6_months_v1', 'months': 6,
+                                        'windowStarts': {'6': '2026-04-20'}, 'referenceDate': '2026-10-20'}
         report['coverage']['scopes'][0]['comparison'] = 'comparable'
         report['counts'].update(rankCandidates=2, pendingRelease=2, excludedOlder=0)
         rendered = self.mailer().render_mail(report, store.config)
