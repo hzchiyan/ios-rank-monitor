@@ -52,7 +52,11 @@ def main():
     mode = args.mode
     if mode is None and getattr(args, "run_id", None):
         test = Store(root, "test")
-        mode = "test" if any(r["runId"] == args.run_id for r in test.state()["runs"]) else "formal"
+        in_test = any(r["runId"] == args.run_id for r in test.state()["runs"])
+        in_formal = any(r["runId"] == args.run_id for r in Store(root).state()["runs"])
+        if in_test and in_formal:
+            raise ValueError("运行编号同时存在正式和测试模式，请显式指定--mode formal或--mode test")
+        mode = "test" if in_test else "formal"
     store = Store(root, mode or "formal")
     if args.command == "import-legacy":
         from rank_monitor.legacy import import_legacy

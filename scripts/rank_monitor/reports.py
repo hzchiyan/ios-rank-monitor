@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from zoneinfo import ZoneInfo
 
-from .core import write_json
+from .core import UNFINISHED, write_json
 
 
 def write_text(path, value):
@@ -80,6 +80,8 @@ def markdown_report(report, config):
              f"- 完整榜单：{coverage['completeScopes']}/{coverage['plannedScopes']}；可比较：{coverage['comparableScopes']}；待比较：{coverage['unknownScopes']}",
              f"- 已确认新进：{report_count(report, 'confirmedNew')}；免费榜：{report_count(report, 'freeNew')}；畅销榜：{report_count(report, 'grossingNew')}", "",
              "无排名比较依据时数量显示0，具体原因见覆盖说明；已确认数量仅覆盖可比较范围。前次未在前80内，不代表已知前次具体名次。", ""]
+    if r.get("cancelled"):
+        lines += ["- 人工取消：" + cell(r.get("abortReason")), ""]
     if latest:
         lines += [f"- 比较口径：每榜单最近有效完整快照，无回溯期限；回溯比较 {coverage['fallbackScopes']}；无历史基准 {coverage['noBaselineScopes']}；本轮缺数 {coverage['currentMissingScopes']}",
                   "上一任务仅表示执行顺序，各榜单实际基准见下表。仅比较两个观测端点，不能推断中间变化或首次进榜时间。", ""]
@@ -137,7 +139,7 @@ def render_all(store):
     days = defaultdict(list)
     for entry in state["runs"]:
         m = store.manifest(entry["runId"])
-        if m["status"] == "running":
+        if m["status"] in UNFINISHED:
             continue
         path = store.locate(m["runId"])
         report = store.archived_report(m["runId"])
@@ -164,7 +166,8 @@ def render_all(store):
         lines = [f"# {day} · iOS 榜单监测", "", "[返回总览](../index.md) · [筛选查看](index.html)", "", "| 北京时间 | 状态 | 完整榜单 | 可比较 | 已确认新进 | 报告 |", "|---|---|---:|---:|---:|---|"]
         for r in reversed(runs):
             meta, cov = r["run"], r["coverage"]
-            lines.append(f"| {clock(meta['startedAt'])} | {meta['status']} | {cov['completeScopes']}/{cov['plannedScopes']} | {cov['comparableScopes']} | {report_count(r)} | [文字](runs/{meta['runId']}/report.md) · [筛选](runs/{meta['runId']}/report.html) |")
+            status = "人工取消" if meta.get("cancelled") else meta["status"]
+            lines.append(f"| {clock(meta['startedAt'])} | {status} | {cov['completeScopes']}/{cov['plannedScopes']} | {cov['comparableScopes']} | {report_count(r)} | [文字](runs/{meta['runId']}/report.md) · [筛选](runs/{meta['runId']}/report.html) |")
         if update_day:
             write_text(date_path / "index.md", "\n".join(lines) + "\n")
         overview.append(f"| [{day}]({day}/index.md) | {clock(latest['run']['startedAt'])} | {len(runs)} | {report_count(latest)} |")

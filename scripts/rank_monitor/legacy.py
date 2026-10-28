@@ -1,5 +1,5 @@
 """Import saved snapshots chronologically, without modifying the source."""
-from .core import normalize_snapshot, parse_time, read_json, scope_key, scopes
+from .core import UNFINISHED, normalize_snapshot, parse_time, read_json, scope_key, scopes
 
 
 def import_legacy(store, source):
@@ -10,7 +10,7 @@ def import_legacy(store, source):
     if not run_id:
         raise ValueError("历史数据缺少run.runId")
     if any(r["runId"] == run_id for r in store.state()["runs"]):
-        if store.manifest(run_id)["status"] == "running":
+        if store.manifest(run_id)["status"] in UNFINISHED:
             raise ValueError("该导入尚未结束；请使用原令牌恢复")
         return {"skipped": True, "runId": run_id, "reason": "该运行编号已导入"}
     started = min((s["capturedAt"] for s in document["snapshots"]), key=parse_time)

@@ -1,5 +1,5 @@
 """Immutable per-scope references to the latest compatible archived observation."""
-from .core import (completion_driven, digest, normalize_snapshot, parse_time,
+from .core import (UNFINISHED, completion_driven, digest, normalize_snapshot, parse_time,
                    read_json, scope_key, shared_scope_compatible, write_json)
 
 LATEST_VERSION = "latest_valid_scope_v1"
@@ -32,7 +32,7 @@ class FrozenBaselines:
         path = self.path(m["runId"])
         if m.get("comparisonBaselinesHash"):
             return self.read(m)
-        if m["status"] != "running":
+        if m["status"] not in UNFINISHED:
             raise ValueError("归档运行缺少已冻结基准，不能重新选择")
         if path.exists():
             data = read_json(path)
@@ -43,7 +43,7 @@ class FrozenBaselines:
             unresolved = set(refs)
             for index in range(len(past)-1, -1, -1):
                 previous = self.store.manifest(past[index]["runId"])
-                if previous["status"] == "running":
+                if previous["status"] in UNFINISHED:
                     raise ValueError("历史轮次尚未归档，不能作为比较基准")
                 wanted = {key for key in unresolved
                           if key in previous["scopes"] and previous["scopes"][key]["status"] == "complete"
@@ -99,7 +99,7 @@ class FrozenBaselines:
                 raise ValueError("比较基准不属于本轮之前的历史")
             if run_id not in loaded:
                 pm = self.store.manifest(run_id)
-                if pm["status"] == "running" or not (self.store.locate(run_id)/"snapshots.jsonl.gz").is_file():
+                if pm["status"] in UNFINISHED or not (self.store.locate(run_id)/"snapshots.jsonl.gz").is_file():
                     raise ValueError("已选基准未归档或快照归档缺失")
                 loaded[run_id] = (pm, {scope_key(s): s for s in self.store.snapshots(run_id)})
             pm, snaps = loaded[run_id]

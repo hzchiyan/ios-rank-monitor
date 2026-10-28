@@ -33,7 +33,7 @@ function categories(){
 }
 function runOptions(wanted){
   $('run').replaceChildren();if(mode==='entrants')add($('run'),'all','当天全部时点');
-  for(const r of [...data.runs].reverse())add($('run'),r.run.runId,when(r.run.startedAt)+' · '+r.run.status);
+  for(const r of [...data.runs].reverse())add($('run'),r.run.runId,when(r.run.startedAt)+' · '+(r.run.cancelled?'人工取消':r.run.status));
   if([...$('run').options].some(o=>o.value===wanted))$('run').value=wanted;
 }
 function selected(){return data.runs.filter(r=>$('run').value==='all'||r.run.runId===$('run').value);}
@@ -140,6 +140,7 @@ function update(){
   $('coverage').replaceChildren();
   for(const r of runs){
     const h=document.createElement('p');h.textContent=when(r.run.startedAt)+' · 上一执行轮次 '+(r.run.previousRunId||'无')+' · 排名规则 '+r.run.ruleVersion+' · 程序 '+r.run.codeVersion+
+      (r.run.cancelled?' · 人工取消：'+r.run.abortReason:'')+
       (r.run.releasePolicy?' · 上线准入 '+r.run.releasePolicy.version+' · 参考日 '+r.run.releasePolicy.referenceDate:' · 历史原规则');$('coverage').append(h);
     for(const s of r.coverage.scopes.filter(s=>s.baseline||s.status!=='complete'||s.comparison==='unknown')){
       const line=document.createElement('div');line.textContent=cfg.countries[s.country]+' / '+s.categoryFamily+' / '+s.category+' / '+cfg.charts[s.chart]+'：'+s.status+' · '+(s.reason||s.comparisonReason||(s.comparison==='comparable'?'可比较':'上次缺完整数据或规则不兼容，待比较'))+(s.baseline?' / '+baselineText(s.baseline):'');$('coverage').append(line);

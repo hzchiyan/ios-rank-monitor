@@ -19,11 +19,17 @@ SCHEMA = 1
 COMPARISON_VERSION = "shared_scopes_v1"
 EXECUTION_POLICY = "completion_v1"
 WORKER_LEASE_MINUTES = 15
+TOKEN_VERSION = "mode_v1"
+UNFINISHED = {"running", "cancelling"}
 TERMINAL = {"source_no_data", "failed", "auth_required", "interrupted"}
 
 
 def completion_driven(manifest):
     return manifest.get("executionPolicy") == EXECUTION_POLICY
+
+
+def cancelling(manifest):
+    return manifest["status"] == "cancelling" or (manifest["status"] == "running" and bool(manifest.get("abortReason")))
 
 
 def utcnow():
@@ -194,6 +200,8 @@ def normalize_snapshot(raw, expected, config, started_at, test=False, *, fixed_s
 
 class Store:
     def __init__(self, root, mode="formal"):
+        if mode not in ("formal", "test"):
+            raise ValueError("运行模式必须为formal或test")
         self.root = Path(root).resolve()
         self.config = load_config(self.root)
         self.mode = mode
@@ -247,16 +255,46 @@ class Store:
     def manifest(self, run_id):
         return read_json(self.locate(run_id) / "manifest.json")
 
-    def _authorize(self, run_id, token, restore_active=False, require_window=False, allow_config_change=False):
-        p = self.local / "tokens" / run_id
-        if not p.exists() or not hmac.compare_digest(p.read_text(), token or ""):
+    def _save_token(self, run_id, token, *, retire_legacy=False):
+        p = self.local / "tokens" / self.mode / run_id
+        p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + ".tmp")
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+            os.fchmod(f.fileno(), 0o600)
+            f.write(token)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+        if retire_legacy:
+            (self.local / "tokens" / run_id).unlink(missing_ok=True)
+
+    def _check_token(self, m, token, *, migrate=True):
+        if m.get("mode") != self.mode or m.get("tokenVersion") not in (None, TOKEN_VERSION):
+            raise ValueError("运行模式或令牌版本不匹配")
+        p = self.local / "tokens" / self.mode / m["runId"]
+        if not p.exists() and m.get("tokenVersion") is None:
+            other = Store(self.root, "test" if self.mode == "formal" else "formal")
+            if any(r["runId"] == m["runId"] for r in other.state()["runs"]):
+                if other.manifest(m["runId"]).get("tokenVersion") is None:
+                    raise ValueError("旧令牌同编号归属有歧义，请指定模式并通过start按租约重新领取")
+            p = self.local / "tokens" / m["runId"]
+        if not p.is_file() or not hmac.compare_digest(p.read_text(), token or ""):
             raise ValueError("运行令牌不匹配；不能修改其他运行")
+        if migrate and m.get("tokenVersion") is None:
+            self._save_token(m["runId"], token, retire_legacy=True)
+            m["tokenVersion"] = TOKEN_VERSION
+            write_json(self.locate(m["runId"]) / "manifest.json", m)
+
+    def _authorize(self, run_id, token, restore_active=False, require_window=False, allow_config_change=False, allow_cancel=False):
         m = self.manifest(run_id)
-        if m["status"] != "running":
+        if m["status"] not in UNFINISHED:
             raise ValueError("运行已结束，原始快照不可修改")
-        if require_window and not completion_driven(m) and self.mode != "test" and utcnow() >= parse_time(m["startedAt"]) + timedelta(minutes=m["config"]["maxRunMinutes"]):
+        is_cancel = cancelling(m)
+        if is_cancel and not allow_cancel:
+            raise ValueError("轮次正在取消，只能完成取消归档，不能继续采集或暂停续跑")
+        if require_window and not is_cancel and not completion_driven(m) and self.mode != "test" and utcnow() >= parse_time(m["startedAt"]) + timedelta(minutes=m["config"]["maxRunMinutes"]):
             raise ValueError("本轮90分钟窗口已结束，请finalize归档")
-        if not allow_config_change and m["configFingerprint"] != config_id(self.config):
+        if not allow_config_change and not (is_cancel and allow_cancel) and m["configFingerprint"] != config_id(self.config):
             raise ValueError("采集期间配置发生改变，请结束本轮后重新启动")
         if self.state()["latestRunId"] != run_id:
             raise ValueError("只有最新进行中的任务可以写入")
@@ -264,8 +302,9 @@ class Store:
         if active.exists():
             if read_json(active)["runId"] != run_id:
                 raise ValueError("另一任务持有采集锁")
-        elif not restore_active:
+        elif not restore_active and not (is_cancel and allow_cancel):
             raise ValueError("运行标记缺失，请先resume恢复最新任务")
+        self._check_token(m, token)
         return m
 
     def _touch(self, run_id):
@@ -292,6 +331,12 @@ class Store:
 
     def _progress(self, m):
         from .releases import ReleaseRecords
+        if cancelling(m):
+            return {"runId": m["runId"], "status": m["status"], "sourceDate": m["date"],
+                    "phase": "cancelling", "canFinalize": False, "pending": [], "release": None,
+                    "abortReason": m["abortReason"], "needsAbortFinalization": True,
+                    "completedScopes": sum(s["status"] == "complete" for s in m["scopes"].values()),
+                    "plannedScopes": len(m["scopes"])}
         pending = self._work(m)
         releases = None
         if not pending and m.get("releasePolicy") and not m.get("blocked"):
@@ -306,10 +351,8 @@ class Store:
     def _claim(self, m):
         self._prepare_baselines(m)
         token = secrets.token_hex(24)
-        p = self.local / "tokens" / m["runId"]
-        p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        p.write_text(token)
-        p.chmod(0o600)
+        self._save_token(m["runId"], token, retire_legacy=m.get("tokenVersion") is None)
+        m["tokenVersion"] = TOKEN_VERSION
         m.pop("blocked", None)
         self._reconcile(m)
         self._touch(m["runId"])
@@ -326,8 +369,11 @@ class Store:
             active_path = self.base / "active.json"
             state = self.state()
             latest = self.manifest(state["latestRunId"]) if state["latestRunId"] else None
-            if origin == "legacy_import" and latest and latest["status"] == "running":
+            if origin == "legacy_import" and latest and latest["status"] in UNFINISHED:
                 raise ValueError("已有采集正在进行，不能导入历史或接管其执行权")
+            if latest and (cancelling(latest) or (latest.get("cancelled") and active_path.exists()
+                                                  and read_json(active_path)["runId"] == latest["runId"])):
+                return self._finish_abort(latest)
             if latest and latest["status"] == "running" and completion_driven(latest):
                 if latest["configFingerprint"] != config_id(self.config):
                     raise ValueError("未结束轮次的配置与当前不同，请先恢复原配置续跑或人工取消")
@@ -361,16 +407,13 @@ class Store:
             path = self.base / day / "runs" / run_id
             relative = path.relative_to(self.root).as_posix()
             token = secrets.token_hex(24)
-            token_path = self.local / "tokens" / run_id
-            token_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            token_path.write_text(token)
-            token_path.chmod(0o600)
+            self._save_token(run_id, token)
             try:
                 version = subprocess.check_output(["git", "describe", "--always", "--dirty"], cwd=self.root, stderr=subprocess.DEVNULL, text=True).strip()
             except (OSError, subprocess.CalledProcessError):
                 version = "uncommitted"
             m = {"schemaVersion": SCHEMA, "runId": run_id, "previousRunId": state["latestRunId"],
-                 "mode": self.mode, "origin": origin, "status": "running", "date": day,
+                 "mode": self.mode, "origin": origin, "status": "running", "date": day, "tokenVersion": TOKEN_VERSION,
                  "startedAt": stamp(when), "finishedAt": None, "timezone": self.config["timezone"],
                  "codeVersion": version, "ruleVersion": self.config["ruleVersion"],
                  "configFingerprint": config_id(self.config), "config": self.config,
@@ -400,6 +443,8 @@ class Store:
 
     def pending(self, run_id):
         m = self.manifest(run_id)
+        if cancelling(m):
+            return []
         if completion_driven(m):
             saved = {scope_key(s) for s in self.snapshots(run_id)}
             return [s for s in self._work(m) if scope_key(s) not in saved]
@@ -407,7 +452,9 @@ class Store:
 
     def resume(self, run_id, token):
         with self.guard():
-            m = self._authorize(run_id, token, restore_active=True)
+            m = self._authorize(run_id, token, restore_active=True, allow_cancel=True)
+            if cancelling(m):
+                return self._finish_abort(m)
             self._prepare_baselines(m)
             if completion_driven(m):
                 m.pop("blocked", None)
@@ -472,7 +519,9 @@ class Store:
 
     def progress(self, run_id, token):
         with self.guard():
-            m = self._authorize(run_id, token, restore_active=True)
+            m = self._authorize(run_id, token, restore_active=True, allow_cancel=True)
+            if cancelling(m):
+                return self._progress(m)
             if not completion_driven(m):
                 raise ValueError("旧轮次不支持完成驱动进度，请使用resume")
             self._reconcile(m)
@@ -541,8 +590,9 @@ class Store:
     def _seal(self, run_id, remaining="failed"):
         path = self.locate(run_id)
         m = self.manifest(run_id)
-        if m["status"] != "running":
+        if m["status"] not in UNFINISHED:
             return m
+        is_cancel = cancelling(m)
         self._prepare_baselines(m)
         snaps = self.snapshots(run_id)
         tmp = path / "snapshots.jsonl.gz.tmp"
@@ -559,8 +609,12 @@ class Store:
             elif s["status"] == "complete":
                 s.update(status="interrupted", reason="完整状态缺少对应快照，需要检查存储")
             if s["status"] == "pending":
-                s.update(status=remaining, reason="任务结束前未取得有效快照")
+                s.update(status=remaining, reason="人工取消：" + m["abortReason"] if is_cancel else "任务结束前未取得有效快照")
         m["status"] = "complete" if len(snaps) == len(m["scopes"]) else "partial" if snaps else "failed"
+        if is_cancel:
+            m["cancelled"] = True
+            if m["status"] == "complete":
+                m["status"] = "partial"
         m["finishedAt"] = max([m["startedAt"], *[s["capturedAt"] for s in snaps]], key=parse_time)
         if m.get("releasePolicy"):
             from .releases import ReleaseRecords
@@ -573,15 +627,17 @@ class Store:
         m["sealedAt"] = stamp(utcnow())
         write_json(path / "manifest.json", m)
         active = self.base / "active.json"
-        if active.exists() and read_json(active)["runId"] == run_id:
+        if not is_cancel and active.exists() and read_json(active)["runId"] == run_id:
             active.unlink()
-        if (path / "checkpoints").exists():
+        if not is_cancel and (path / "checkpoints").exists():
             shutil.rmtree(path / "checkpoints")
         return m
 
     def finalize(self, run_id, token):
         with self.guard():
-            m = self._authorize(run_id, token)
+            m = self._authorize(run_id, token, allow_cancel=True)
+            if cancelling(m):
+                return self._finish_abort(m)
             if completion_driven(m):
                 self._reconcile(m)
                 if not self._progress(m)["canFinalize"]:
@@ -596,13 +652,42 @@ class Store:
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("人工取消必须提供原因")
         with self.guard():
-            m = self._authorize(run_id, token, restore_active=True, allow_config_change=True)
-            m["abortReason"] = reason[:500]
+            m = self.manifest(run_id)
+            if m["status"] not in UNFINISHED and m.get("cancelled"):
+                self._check_token(m, token, migrate=False)
+                return self._finish_abort(m)
+            m = self._authorize(run_id, token, restore_active=True, allow_config_change=True, allow_cancel=True)
+            if not cancelling(m):
+                m["abortReason"] = reason[:500]
+                m["abortRequestedAt"] = stamp(utcnow())
+            m["status"] = "cancelling"
             m.pop("blocked", None)
             write_json(self.locate(run_id) / "manifest.json", m)
-            m = self._seal(run_id, "interrupted")
-            self._render()
-            return {"runId": run_id, "status": m["status"], "abortReason": m["abortReason"]}
+            return self._finish_abort(m)
+
+    def _abort_result(self, m):
+        return {"runId": m["runId"], "mode": self.mode, "status": m["status"], "cancelled": True,
+                "abortReason": m["abortReason"], "report": (self.locate(m["runId"])/"report.md").relative_to(self.root).as_posix()}
+
+    def _finish_abort(self, m):
+        active = self.base / "active.json"
+        if m["status"] in UNFINISHED:
+            if active.exists() and read_json(active)["runId"] != m["runId"]:
+                raise ValueError("取消恢复标记与另一任务冲突，保留现场并停止")
+            if not active.exists():
+                write_json(active, {"runId": m["runId"], "leaseUpdatedAt": stamp(utcnow())})
+            if m["status"] != "cancelling":
+                m["status"] = "cancelling"
+                m["abortRecoveredAt"] = stamp(utcnow())
+                write_json(self.locate(m["runId"])/"manifest.json", m)
+            m = self._seal(m["runId"], "interrupted")
+        self._render()
+        checkpoints = self.locate(m["runId"]) / "checkpoints"
+        if checkpoints.exists():
+            shutil.rmtree(checkpoints)
+        if active.exists() and read_json(active)["runId"] == m["runId"]:
+            active.unlink()
+        return self._abort_result(m)
 
     def _compare_rank(self, run_id):
         from .comparison import FrozenBaselines, LATEST_VERSION, interval
@@ -682,7 +767,7 @@ class Store:
     def archived_report(self, run_id):
         """Read frozen results; compute only a never-generated archive after sealing."""
         m = self.manifest(run_id)
-        if m["status"] == "running":
+        if m["status"] in UNFINISHED:
             raise ValueError("进行中轮次没有封存报告")
         path = self.locate(run_id)
         cached = path/"report-data.json"

@@ -328,3 +328,9 @@ class LatestValidTests(helpers.Harness):
 
     def test_legacy_lifecycle_recovers_interruption_before_baseline_checksum(self):
         self._legacy_lifecycle_freeze_failure('manifest.json')
+
+    def test_cancelling_history_is_never_treated_as_archived_baseline(self):
+        a,_,c=self.pair_with_gap()
+        path=self.store.locate(a['runId'])/'manifest.json';m=read_json(path)
+        m.update(status='cancelling',abortReason='interrupted cancellation');write_json(path,m)
+        with self.assertRaisesRegex(ValueError,'归档'):self.report(c)

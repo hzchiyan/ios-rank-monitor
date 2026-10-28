@@ -1,6 +1,6 @@
 # 命令与数据接口
 
-脚本自行定位仓库。默认正式模式，测试加`--mode test`，历史完全分离。TOKEN是本次执行权令牌，不是七麦密码，不复制到报告。start领取/接管时返回令牌并保存在`.local/tokens/RUN_ID`。新执行者必须经start领取，不能直接读取别的执行者令牌抢占；工具重置仍持有本次执行权时可用原令牌resume。
+脚本自行定位仓库。默认正式模式，测试加`--mode test`，历史完全分离。TOKEN是本次执行权令牌，不是七麦密码，不复制到报告。start领取/接管时返回令牌并保存在`.local/tokens/formal/RUN_ID`或`.local/tokens/test/RUN_ID`，权限600，manifest记录tokenVersion=mode_v1。同编号同时存在两种模式时必须显式--mode formal/test，不能默认猜模式。新执行者必须经start领取，不能直接读取别的执行者令牌抢占；工具重置仍持有本次执行权时可用原令牌resume。
 
 ```sh
 python3 scripts/monitor.py doctor
@@ -29,6 +29,16 @@ pending只列新轮尚可执行的榜单范围，包含attemptsRemaining；完�
 登记时保存baselines.json（schemaVersion、comparisonVersion、runId、scopes）及manifest.comparisonBaselinesHash。每范围记录baselineRunId、sourceDate、capturedAt、snapshotHash、skippedRuns或null。首次固化中断可恢复；摘要已保存后文件丢失/改变不得重选。当前comparisonBaselines逐触发榜单提供currentCapturedAt/currentSourceDate/elapsedSeconds，coverage.scopes.baseline保留全部范围依据。coverage新增fallbackScopes（已比较且跨过轮次）、noBaselineScopes（本轮完整但无基准）、currentMissingScopes；前两项与本轮缺数分开报告。previousRunId继续表示上一执行轮次。
 
 旧shared_scopes_v1仍严格相邻；无版本旧轮仍整体指纹比较。缺少comparisonVersion配置时默认shared_scopes_v1。运行中变更开关会被配置指纹校验拒绝。import-legacy按完整目录导入，不裁剪旧游戏快照。
+
+## 令牌兼容与取消恢复
+
+唯一旧版共享令牌`.local/tokens/RUN_ID`在成功授权时迁移到对应模式目录，并废弃共享文件；迁移中断后可继续读取本模式令牌。新令牌缺失不回退旧路径。旧同编号记录跨模式且无法判属时拒绝授权；分别使用start及明确模式，在原租约规则允许时领取独立令牌，不手工复制或猜测。已结束历史不迁移、不重写。
+
+abort仅用户明确取消时调用：先写status=cancelling、abortReason和abortRequestedAt，再归档。旧running+abortReason也视作取消意图。此时pending为空、progress.phase=cancelling且canFinalize=false；禁止ingest/mark/日期补查/suspend，不能撤销取消后续跑。start/resume/finalize及再次abort只完成取消归档，即使配置已变也不继续采集，不在这次恢复新建轮次。
+
+取消的active.json恢复标记保留到报告生成及清理成功。终态后仍有同轮标记时，start只补报告和清理并返回原轮取消结果，不新建轮次、不重写封存记录；没有标记的正常已结束取消轮不会阻止后续正常时点开新轮。
+
+完成取消返回cancelled=true、runId、mode、终态及原因/报告路径，不返回新采集令牌。终态仍为partial或failed，同时保存cancelled=true；报告和邮件标明人工取消。即使数据已齐，人工取消也不宣称完整完成。重复abort保留原取消原因；封存后报告生成失败可render或重复abort恢复，不能重新采集。取消未封存不渲染、不发送；已封存摘要按既有正式邮件规则显式处理。start看到cancelled=true后只汇报取消结果/已有报告，不进入采集或再start。
 
 ## ingest
 

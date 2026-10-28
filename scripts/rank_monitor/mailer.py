@@ -106,7 +106,7 @@ def _link(entry):
 def render_mail(report, config):
     esc = lambda v: html.escape(str(v if v not in [None, ''] else '—'), quote=True)
     run, coverage, counts = report['run'], report['coverage'], report['counts']
-    status = {'complete': '完整完成', 'partial': '部分完成', 'failed': '失败'}[run['status']]
+    status = '人工取消' if run.get('cancelled') else {'complete': '完整完成', 'partial': '部分完成', 'failed': '失败'}[run['status']]
     started = clock(run['startedAt'])
     confirmed = report_count(report)
     subject = f"iOS 榜单监测｜{started}｜{status}｜入选{confirmed}"
@@ -132,6 +132,8 @@ def render_mail(report, config):
         notice += ' 首次发布日期待核实的候选未进入入选列表。'
     if latest:
         notice += ' 每个榜单比较最近有效完整快照，不设回溯期限；实际跨度分别列出，仅表示两个观测端点的差异。'
+    if run.get('cancelled'):
+        notice += ' 已按用户请求取消；原因：' + run.get('abortReason', '')
     metrics = []
     for i in range(0, len(summary), 3):
         cells = ''.join(f'<td width="33%" style="padding:12px 8px;border:1px solid #ccd5d2;vertical-align:top;">'
