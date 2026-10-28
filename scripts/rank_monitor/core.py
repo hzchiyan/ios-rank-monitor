@@ -81,6 +81,9 @@ def load_config(root):
         raise ValueError("scanFamilies必须是非空、无重复的应用或游戏大类列表")
     if "executionPolicy" in c and c["executionPolicy"] != EXECUTION_POLICY:
         raise ValueError("执行策略不受支持")
+    comparison_version = c.get("comparisonVersion", COMPARISON_VERSION)
+    if not isinstance(comparison_version, str) or comparison_version not in {COMPARISON_VERSION, "latest_valid_scope_v1"}:
+        raise ValueError("排名比较版本不受支持")
     if type(c["maxScopeRetries"]) is not int or not 0 <= c["maxScopeRetries"] <= 10:
         raise ValueError("范围重试次数必须为0至10的整数")
     from .releases import policy_for
@@ -94,6 +97,8 @@ def config_id(config):
         value["scanFamilies"] = config["scanFamilies"]
     if "executionPolicy" in config:
         value["executionPolicy"] = config["executionPolicy"]
+    if "comparisonVersion" in config:
+        value["comparisonVersion"] = config["comparisonVersion"]
     return digest(value)
 
 
@@ -299,6 +304,7 @@ class Store:
                 "plannedScopes": len(m["scopes"]), "release": releases}
 
     def _claim(self, m):
+        self._prepare_baselines(m)
         token = secrets.token_hex(24)
         p = self.local / "tokens" / m["runId"]
         p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -371,7 +377,7 @@ class Store:
                  "scopes": {scope_key(s): {**s, "status": "pending"}
                             for s in scopes(self.config, include_inactive=origin == "legacy_import")}}
             if origin == "browser":
-                m["comparisonVersion"] = COMPARISON_VERSION
+                m["comparisonVersion"] = self.config.get("comparisonVersion", COMPARISON_VERSION)
                 if self.config.get("executionPolicy") == EXECUTION_POLICY:
                     m["executionPolicy"] = EXECUTION_POLICY
             from .releases import policy_for
@@ -382,6 +388,7 @@ class Store:
             state["runs"].append({"runId": run_id, "relativePath": relative})
             state["latestRunId"] = run_id
             write_json(self.base / "state.json", state)
+            self._prepare_baselines(m)
             write_json(active_path, {"runId": run_id, "leaseUpdatedAt": stamp(utcnow())})
             result = {"runId": run_id, "token": token, "relativePath": relative, "previousRunId": m["previousRunId"], "plannedScopes": len(m["scopes"])}
             if completion_driven(m):
@@ -401,6 +408,7 @@ class Store:
     def resume(self, run_id, token):
         with self.guard():
             m = self._authorize(run_id, token, restore_active=True)
+            self._prepare_baselines(m)
             if completion_driven(m):
                 m.pop("blocked", None)
                 self._reconcile(m)
@@ -535,6 +543,7 @@ class Store:
         m = self.manifest(run_id)
         if m["status"] != "running":
             return m
+        self._prepare_baselines(m)
         snaps = self.snapshots(run_id)
         tmp = path / "snapshots.jsonl.gz.tmp"
         with tmp.open("wb") as raw_file:
@@ -596,13 +605,17 @@ class Store:
             return {"runId": run_id, "status": m["status"], "abortReason": m["abortReason"]}
 
     def _compare_rank(self, run_id):
+        from .comparison import FrozenBaselines, LATEST_VERSION, interval
         m = self.manifest(run_id)
         version = m.get("comparisonVersion")
-        if version not in [None, COMPARISON_VERSION]:
+        if version not in [None, COMPARISON_VERSION, LATEST_VERSION]:
             raise ValueError("排名比较版本不受支持，保留数据并停止")
         current = {scope_key(s): s for s in self.snapshots(run_id)}
         previous = {}
-        if m["previousRunId"]:
+        baselines = {}
+        if version == LATEST_VERSION:
+            previous, baselines = FrozenBaselines(self).snapshots(m)
+        elif m["previousRunId"]:
             pm = self.manifest(m["previousRunId"])
             if version == COMPARISON_VERSION:
                 previous = {scope_key(s): s for s in self.snapshots(pm["runId"])
@@ -612,8 +625,11 @@ class Store:
         entries, comparison = {}, []
         for key, status in m["scopes"].items():
             comparable = key in current and key in previous
-            comparison.append({**status, "comparison": "comparable" if comparable else "unknown",
-                               "previousComplete": key in previous})
+            coverage = {**status, "comparison": "comparable" if comparable else "unknown", "previousComplete": key in previous}
+            if version == LATEST_VERSION:
+                coverage["baseline"] = interval(baselines[key], current[key]) if comparable else baselines.get(key)
+                coverage["comparisonReason"] = "" if comparable else "本轮缺少完整快照" if key not in current else "历史中没有兼容完整快照，建立该范围基线"
+            comparison.append(coverage)
             if not comparable:
                 continue
             old = {r["appId"] for r in previous[key]["rows"]}
@@ -624,6 +640,8 @@ class Store:
                 e = entries.setdefault(identity, {**row, **{k: status[k] for k in ["country", "categoryFamily", "category", "genreId"]},
                                                   "triggers": [], "ranks": {}, "capturedAt": current[key]["capturedAt"]})
                 e["triggers"].append(status["chart"])
+                if version == LATEST_VERSION:
+                    e.setdefault("comparisonBaselines", {})[status["chart"]] = coverage["baseline"]
         for e in entries.values():
             e["triggers"].sort()
             e["rankStates"] = {}
@@ -638,10 +656,20 @@ class Store:
                   "coverage": {"plannedScopes": len(comparison), "completeScopes": len(current), "comparableScopes": comparable,
                                "unknownScopes": len(comparison) - comparable, "scopes": comparison},
                   "counts": {"confirmedNew": len(entries) if comparable else None}}
+        if version == LATEST_VERSION:
+            result["coverage"].update(
+                fallbackScopes=sum(s["comparison"] == "comparable" and s["baseline"]["skippedRuns"] > 0 for s in comparison),
+                noBaselineScopes=sum(s["status"] == "complete" and s["baseline"] is None for s in comparison),
+                currentMissingScopes=len(m["scopes"])-len(current))
         for chart in m["config"]["charts"]:
             any_comparable = any(s["chart"] == chart and s["comparison"] == "comparable" for s in comparison)
             result["counts"][chart + "New"] = sum(chart in e["triggers"] for e in entries.values()) if any_comparable else None
         return result
+
+    def _prepare_baselines(self, m):
+        from .comparison import FrozenBaselines, LATEST_VERSION
+        if m.get("comparisonVersion") == LATEST_VERSION:
+            FrozenBaselines(self).prepare(m)
 
     def compare(self, run_id):
         report = self._compare_rank(run_id)
@@ -649,6 +677,25 @@ class Store:
         if manifest.get("releasePolicy"):
             from .releases import ReleaseRecords, apply_admission, read_records
             report = apply_admission(report, manifest, read_records(ReleaseRecords(self).path(run_id)))
+        return report
+
+    def archived_report(self, run_id):
+        """Read frozen results; compute only a never-generated archive after sealing."""
+        m = self.manifest(run_id)
+        if m["status"] == "running":
+            raise ValueError("进行中轮次没有封存报告")
+        path = self.locate(run_id)
+        cached = path/"report-data.json"
+        if cached.exists():
+            report = read_json(cached)
+            if (report.get("schemaVersion") != SCHEMA or report.get("run", {}).get("runId") != run_id
+                    or report["run"].get("status") != m["status"]):
+                raise ValueError("历史封存报告与运行记录不一致，不能重新计算覆盖")
+            return report
+        if (path/"report.md").exists() or (path/"report.html").exists():
+            raise ValueError("历史封存报告数据缺失，请恢复原文件，不能重新计算覆盖")
+        report = self.compare(run_id)
+        write_json(cached, report)
         return report
 
     def render(self):

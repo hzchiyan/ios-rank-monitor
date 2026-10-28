@@ -24,7 +24,11 @@ resume恢复保存的快照状态及待办，progress返回phase（rankings/rele
 
 pending只列新轮尚可执行的榜单范围，包含attemptsRemaining；完成、明确缺数及重试耗尽项不再列入。每次先完成全部榜单，再执行日期补查；progress会在排名结束后固化可用日期缓存并给出日期pending。还有可执行项或全局阻塞时finalize拒绝归档。只有用户明确取消，才可执行`abort RUN_ID --token TOKEN --reason "用户取消原因"`封存不完整轮次；日常任务不能用abort绕过检查。
 
-正常采集按scanFamilies生成计划，当前仅应用共144范围；缺少开关的旧配置默认为应用与游戏共240范围。新浏览器轮次manifest记录comparisonVersion=shared_scopes_v1，相邻公共范围的排名规则、设备、前80门槛、时区和分类定义一致时继续比较。旧轮次无该字段时沿用整体指纹规则。运行中变更开关会被配置指纹校验拒绝。import-legacy按完整目录导入，不裁剪旧游戏快照。
+正常采集按scanFamilies生成计划，当前仅应用共144范围；缺少开关的旧配置默认为应用与游戏共240范围。当前配置comparisonVersion=latest_valid_scope_v1，新浏览器轮次按各范围从本轮之前的归档历史逆序找最近兼容完整快照，不设回溯期限。排名规则、设备、前80门槛、时区和分类定义须一致；已归档的部分轮次中完整范围可用，正式/测试隔离。缺数和不兼容范围跳过，存储损坏停止并报错；没有兼容历史则建立该范围基线，本轮缺数不能用旧数据填充。
+
+登记时保存baselines.json（schemaVersion、comparisonVersion、runId、scopes）及manifest.comparisonBaselinesHash。每范围记录baselineRunId、sourceDate、capturedAt、snapshotHash、skippedRuns或null。首次固化中断可恢复；摘要已保存后文件丢失/改变不得重选。当前comparisonBaselines逐触发榜单提供currentCapturedAt/currentSourceDate/elapsedSeconds，coverage.scopes.baseline保留全部范围依据。coverage新增fallbackScopes（已比较且跨过轮次）、noBaselineScopes（本轮完整但无基准）、currentMissingScopes；前两项与本轮缺数分开报告。previousRunId继续表示上一执行轮次。
+
+旧shared_scopes_v1仍严格相邻；无版本旧轮仍整体指纹比较。缺少comparisonVersion配置时默认shared_scopes_v1。运行中变更开关会被配置指纹校验拒绝。import-legacy按完整目录导入，不裁剪旧游戏快照。
 
 ## ingest
 
@@ -70,6 +74,10 @@ verified必须校验可见App ID、国家、明确的最早发布标签及与原
 报告展示层将无排名比较依据的数量显示为0，并保留覆盖与待比较说明；report-data.json中的null不改写为0。已有排名候选但日期全部未知时，展示层仍显示待核实。
 
 日期补查次数保存在本轮记录中。prepare-release的pending项包含attempts和attemptsRemaining；首次尝试加最多2次重试，累计用尽后不再返回到pending，exhaustedApps说明仍未核实的耗尽数量。重置或resume不清零；新轮持久化全部尝试的证据摘要，A、B保存后再重发A也不增加次数或覆盖最新证据。新轮prepare-release/ingest-release不受90分钟限制。无executionPolicy的旧轮次仍保留deadlineAt/windowExpired及旧窗口校验，重建历史不切换策略；旧版导入不启用新执行策略。
+
+## 历史报告保护
+
+render、finalize后报告生成及邮件预览复用已归档report-data.json，不重算已有历史结果。已有report.md/report.html不重写；日期HTML和Markdown均检查实际包含的归档轮次集合；新增、缺失或中断未补齐时才更新，混合日期页读取旧轮冻结结果。缺失HTML/Markdown可从冻结JSON重建；历史JSON缺失但已有报告时明确报错、恢复原文件，不能自动重算。新封存尚无任何报告的轮次允许首次计算。旧邮件content.json与发送记录继续冻结，render不发信。
 
 ## 可选QQ邮件
 

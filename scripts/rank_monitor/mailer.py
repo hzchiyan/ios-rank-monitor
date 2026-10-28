@@ -15,7 +15,7 @@ import ssl
 import stat
 
 from .core import digest, read_json, stamp, utcnow, write_json
-from .reports import clock, count, report_count, write_text
+from .reports import clock, count, entry_baselines, report_count, write_text
 
 
 class MailError(ValueError):
@@ -118,6 +118,10 @@ def render_mail(report, config):
                ('完整榜单', f"{coverage['completeScopes']}/{coverage['plannedScopes']}"),
                ('可比较范围', f"{coverage['comparableScopes']}/{coverage['plannedScopes']}"),
                ('待比较范围', str(coverage['unknownScopes']))]
+    latest = run.get('comparisonVersion') == 'latest_valid_scope_v1'
+    if latest:
+        summary += [('回溯比较范围', str(coverage['fallbackScopes'])), ('无历史基准', str(coverage['noBaselineScopes'])),
+                    ('本轮缺数', str(coverage['currentMissingScopes']))]
     if release:
         summary += [('排名候选', count(counts.get('rankCandidates'))),
                     ('超过六个月排除', count(counts.get('excludedOlder'))),
@@ -126,6 +130,8 @@ def render_mail(report, config):
               if not run.get('previousRunId') else '已确认数量仅覆盖可比较范围，缺数及待比较不等于确认没有新进。')
     if release and counts.get('pendingRelease'):
         notice += ' 首次发布日期待核实的候选未进入入选列表。'
+    if latest:
+        notice += ' 每个榜单比较最近有效完整快照，不设回溯期限；实际跨度分别列出，仅表示两个观测端点的差异。'
     metrics = []
     for i in range(0, len(summary), 3):
         cells = ''.join(f'<td width="33%" style="padding:12px 8px;border:1px solid #ccd5d2;vertical-align:top;">'
@@ -148,19 +154,23 @@ def render_mail(report, config):
                      '前80以外/未上榜' if e['rankStates'][chart] == 'outside_top80' else '缺数'
                      for chart in ['free', 'grossing']}
             triggers = '、'.join(config['charts'][c] for c in e['triggers'])
+            baselines = entry_baselines(e, config)
+            baseline_html = '<br>'+esc(baselines) if baselines else ''
             released = e.get('releaseDate') or '未采集'
             rating = f"{e['rating'] or '—'} / {e['ratingCount'] or '—'}"
             style = 'padding:12px 10px;border-bottom:1px solid #e2e6e0;vertical-align:top;font-size:12px;'
             groups.append(f'<tr><td style="{style}"><a href="{esc(url)}" style="color:#147482;font-size:15px;text-decoration:underline;">{esc(e["name"])}</a><br>{esc(e["developer"])}<br><span style="color:#5d7075;">ID {esc(e["appId"])}</span></td>'
-                          f'<td style="{style}">免费榜：{esc(ranks["free"])}<br>畅销榜：{esc(ranks["grossing"])}<br>触发：{esc(triggers)}</td>'
+                          f'<td style="{style}">免费榜：{esc(ranks["free"])}<br>畅销榜：{esc(ranks["grossing"])}<br>触发：{esc(triggers)}{baseline_html}</td>'
                           f'<td style="{style}">最早发布：{esc(released)}<br>评分 / 数量：{esc(rating)}<br>版本日期：{esc(e["latestVersionDate"])}</td></tr>')
             plain_groups.append(f"{e['name']} · {e['developer']} · ID {e['appId']}\n免费榜：{ranks['free']}；畅销榜：{ranks['grossing']}；触发：{triggers}\n最早发布：{released}；评分 / 数量：{rating}；版本日期：{e['latestVersionDate'] or '—'}\n详情：{url}")
+            if baselines:
+                plain_groups.append(baselines)
         groups.append('</table>')
     if not grouped:
         empty = '本轮暂无已确认入选记录。请结合运行状态、比较覆盖及日期待核实数量判断。'
         groups.append(f'<p style="padding:18px;background:#eaf0eb;">{empty}</p>')
         plain_groups.append(empty)
-    reasons = Counter(s.get('reason') or '上一轮缺少对应完整快照或排名规则不兼容'
+    reasons = Counter(s.get('reason') or s.get('comparisonReason') or '上一轮缺少对应完整快照或排名规则不兼容'
                       for s in coverage['scopes'] if s['status'] != 'complete' or s['comparison'] == 'unknown')
     exceptions = [f'{reason}（{n} 个范围）' for reason, n in sorted(reasons.items())] or ['本轮榜单完整且所有范围均可比较。']
     coverage_html = ''.join(f'<p style="font-size:13px;margin:6px 0 12px;">{esc(line)}</p>' for line in exceptions)
@@ -202,7 +212,7 @@ class MailDelivery:
             if content.get('runId') != run_id or content.get('hash') != digest(content.get('body')):
                 raise MailError('冻结邮件正文与运行编号或内容摘要不一致')
             return content['body']
-        return render_mail(self.store.compare(run_id), self.store.manifest(run_id)['config'])
+        return render_mail(self.store.archived_report(run_id), self.store.manifest(run_id)['config'])
 
     def preview(self, run_id):
         self._closed(run_id)

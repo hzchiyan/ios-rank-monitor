@@ -5,6 +5,7 @@ import html
 import json
 import os
 from pathlib import Path
+import re
 from zoneinfo import ZoneInfo
 
 from .core import write_json
@@ -43,9 +44,31 @@ def report_count(report, key="confirmedNew"):
     return "待核实" if comparable else "0"
 
 
+def duration(seconds):
+    seconds = round(seconds)
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    return "".join(f"{n}{unit}" for n, unit in [(days, "天"), (hours, "小时"), (minutes, "分"), (seconds, "秒")] if n) or "0秒"
+
+
+def baseline_text(baseline):
+    text = (f"基准 {baseline['baselineRunId']}；来源日期 {baseline['sourceDate']}；"
+            f"基准采集 {clock(baseline['capturedAt'])}（北京时间）")
+    if "elapsedSeconds" in baseline:
+        text += f"；本轮采集 {clock(baseline['currentCapturedAt'])}；实际跨度 {duration(baseline['elapsedSeconds'])}"
+    return text + f"；跨过{baseline['skippedRuns']}轮"
+
+
+def entry_baselines(entry, config):
+    return "；".join(config["charts"][chart]+"："+baseline_text(baseline)
+                    for chart, baseline in sorted(entry.get("comparisonBaselines", {}).items()))
+
+
 def markdown_report(report, config):
     r, coverage = report["run"], report["coverage"]
     policy = r.get("releasePolicy")
+    latest = r.get("comparisonVersion") == "latest_valid_scope_v1"
     lines = [f"# iOS 榜单监测 · {clock(r['startedAt'])}", "",
              "[返回日期页](../../index.md) · [返回总览](../../../index.md) · [筛选查看](report.html)", "",
              f"- 运行编号：{r['runId']}；状态：{r['status']}；来源：{r['origin']}",
@@ -53,6 +76,9 @@ def markdown_report(report, config):
              f"- 完整榜单：{coverage['completeScopes']}/{coverage['plannedScopes']}；可比较：{coverage['comparableScopes']}；待比较：{coverage['unknownScopes']}",
              f"- 已确认新进：{report_count(report, 'confirmedNew')}；免费榜：{report_count(report, 'freeNew')}；畅销榜：{report_count(report, 'grossingNew')}", "",
              "无排名比较依据时数量显示0，具体原因见覆盖说明；已确认数量仅覆盖可比较范围。前次未在前80内，不代表已知前次具体名次。", ""]
+    if latest:
+        lines += [f"- 比较口径：每榜单最近有效完整快照，无回溯期限；回溯比较 {coverage['fallbackScopes']}；无历史基准 {coverage['noBaselineScopes']}；本轮缺数 {coverage['currentMissingScopes']}",
+                  "上一任务仅表示执行顺序，各榜单实际基准见下表。仅比较两个观测端点，不能推断中间变化或首次进榜时间。", ""]
     if policy:
         lines += [f"- 上线准入：七麦最早发布 {policy['windowStarts']['6']} 至 {policy['referenceDate']}（包含边界日）；策略：{policy['version']}",
                   f"- 排名候选：{count(report['counts']['rankCandidates'])}；超过六个月排除：{count(report['counts']['excludedOlder'])}；首次发布日期待核实：{count(report['counts']['pendingRelease'])}", ""]
@@ -62,12 +88,12 @@ def markdown_report(report, config):
     for (family, category, country), entries in sorted(grouped.items()):
         release_header = " 最早发布 |" if policy else ""
         lines += [f"## {cell(family)} / {cell(category)} · {config['countries'][country]}", "",
-                  f"| App | 开发者 | 免费榜 | 畅销榜 | 触发 | 评分 / 数量 |{release_header} 版本日期 |",
-                  "|---|---|---:|---:|---|---|" + ("---|" if policy else "") + "---|"]
+                  f"| App | 开发者 | 免费榜 | 畅销榜 | 触发 | 评分 / 数量 |{release_header} 版本日期 |" + (" 比较基准 / 实际跨度 |" if latest else ""),
+                  "|---|---|---:|---:|---|---|" + ("---|" if policy else "") + "---|" + ("---|" if latest else "")]
         for e in entries:
             rank = lambda chart: e["ranks"][chart] or ("前80以外/未上榜" if e["rankStates"][chart] == "outside_top80" else "缺数")
             release_value = f" {cell(e.get('releaseDate'))} |" if policy else ""
-            lines.append(f"| [{cell(e['name'])}]({e['qimaiUrl']}) · {e['appId']} | {cell(e['developer'])} | {rank('free')} | {rank('grossing')} | {'、'.join(config['charts'][x] for x in e['triggers'])} | {cell(e['rating'])} / {cell(e['ratingCount'])} |{release_value} {cell(e['latestVersionDate'])} |")
+            lines.append(f"| [{cell(e['name'])}]({e['qimaiUrl']}) · {e['appId']} | {cell(e['developer'])} | {rank('free')} | {rank('grossing')} | {'、'.join(config['charts'][x] for x in e['triggers'])} | {cell(e['rating'])} / {cell(e['ratingCount'])} |{release_value} {cell(e['latestVersionDate'])} |" + (f" {cell(entry_baselines(e, config))} |" if latest else ""))
         lines.append("")
     if not grouped:
         lines += ["本轮没有已确认的新进记录。请结合上方可比较范围判断是否为基线或缺数。", ""]
@@ -79,9 +105,27 @@ def markdown_report(report, config):
     lines += ["## 数据覆盖与异常", "", "| 国家 | 大类 / 分类 | 榜单 | 当前状态 | 比较 | 原因 |", "|---|---|---|---|---|---|"]
     for s in coverage["scopes"]:
         if s["status"] != "complete" or s["comparison"] == "unknown":
-            reason = s.get("reason", "上次缺少对应完整数据或规则不兼容")
+            reason = s.get("reason") or s.get("comparisonReason") or "上次缺少对应完整数据或规则不兼容"
             lines.append(f"| {config['countries'][s['country']]} | {s['categoryFamily']} / {s['category']} | {config['charts'][s['chart']]} | {cell(s['status'])} | {s['comparison']} | {cell(reason)} |")
+    if latest:
+        lines += ["", "## 各榜单比较基准与实际跨度", "", "| 国家 / 分类 | 榜单 | 基准与跨度 |", "|---|---|---|"]
+        for s in coverage["scopes"]:
+            if s["comparison"] == "comparable":
+                lines.append(f"| {cell(config['countries'][s['country']])} / {cell(s['categoryFamily'])} / {cell(s['category'])} | {cell(config['charts'][s['chart']])} | {cell(baseline_text(s['baseline']))} |")
     return "\n".join(lines) + "\n"
+
+
+def daily_contains(path, expected):
+    """Both daily outputs must contain every archived run, including after a failed write."""
+    try:
+        text = (path/"index.html").read_text(encoding="utf-8")
+        payload = json.loads(text.split('<script id="payload" type="application/json">', 1)[1].split('</script>', 1)[0])
+        html_runs = {r["run"]["runId"] for r in payload["runs"]}
+        markdown = (path/"index.md").read_text(encoding="utf-8")
+        markdown_runs = set(re.findall(r'\]\(runs/([^/)]+)/report\.md\)', markdown))
+        return payload["date"] == path.name and html_runs == markdown_runs == expected
+    except (OSError, ValueError, IndexError, KeyError, TypeError):
+        return False
 
 
 def render_all(store):
@@ -91,13 +135,14 @@ def render_all(store):
         m = store.manifest(entry["runId"])
         if m["status"] == "running":
             continue
-        report = store.compare(m["runId"])
         path = store.locate(m["runId"])
-        write_json(path / "report-data.json", report)
-        write_text(path / "report.md", markdown_report(report, m["config"]))
+        report = store.archived_report(m["runId"])
+        if not (path/"report.md").exists():
+            write_text(path / "report.md", markdown_report(report, m["config"]))
         target = "../../index.html#run=" + m["runId"]
-        write_text(path / "report.html", '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>打开单次报告</title>'
-                   + f'<meta http-equiv="refresh" content="0;url={target}"><a href="{target}">打开此时点报告</a></html>')
+        if not (path/"report.html").exists():
+            write_text(path / "report.html", '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>打开单次报告</title>'
+                       + f'<meta http-equiv="refresh" content="0;url={target}"><a href="{target}">打开此时点报告</a></html>')
         days[m["date"]].append({**report, "snapshots": store.snapshots(m["runId"])})
     dates = sorted(days, reverse=True)
     template = (store.root / "assets/report.html").read_text(encoding="utf-8")
@@ -109,12 +154,15 @@ def render_all(store):
         date_path = store.base / day
         payload = {"date": day, "dates": dates, "config": store.config, "runs": runs}
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
-        write_text(date_path / "index.html", template.replace("__PAYLOAD__", encoded).replace("__DATE__", day))
+        update_day = not daily_contains(date_path, {r["run"]["runId"] for r in runs})
+        if update_day:
+            write_text(date_path / "index.html", template.replace("__PAYLOAD__", encoded).replace("__DATE__", day))
         lines = [f"# {day} · iOS 榜单监测", "", "[返回总览](../index.md) · [筛选查看](index.html)", "", "| 北京时间 | 状态 | 完整榜单 | 可比较 | 已确认新进 | 报告 |", "|---|---|---:|---:|---:|---|"]
         for r in reversed(runs):
             meta, cov = r["run"], r["coverage"]
             lines.append(f"| {clock(meta['startedAt'])} | {meta['status']} | {cov['completeScopes']}/{cov['plannedScopes']} | {cov['comparableScopes']} | {report_count(r)} | [文字](runs/{meta['runId']}/report.md) · [筛选](runs/{meta['runId']}/report.html) |")
-        write_text(date_path / "index.md", "\n".join(lines) + "\n")
+        if update_day:
+            write_text(date_path / "index.md", "\n".join(lines) + "\n")
         overview.append(f"| [{day}]({day}/index.md) | {clock(latest['run']['startedAt'])} | {len(runs)} | {report_count(latest)} |")
         archive_links.append(f'<li><a href="{day}/index.html"><strong>{day}</strong><span>{len(runs)} 次采集 · 最近新进 {report_count(latest)}</span></a></li>')
     write_text(store.base / "index.md", "\n".join(overview) + "\n")

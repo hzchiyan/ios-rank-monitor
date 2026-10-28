@@ -24,6 +24,7 @@ class Harness(unittest.TestCase):
         config.pop("scanFamilies", None)
         # Preserve archived lifecycle fixtures; completion-driven runs have their own suite.
         config.pop("executionPolicy", None)
+        config.pop("comparisonVersion", None)
         config_path.write_text(json.dumps(config))
 
     def tearDown(self):

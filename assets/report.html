@@ -8,10 +8,10 @@
 <main><div class="stats"><div class="stat"><b id="new-count">—</b><span>已确认入选记录</span></div><div class="stat"><b id="complete-count">—</b><span>完整榜单 / 计划范围</span></div><div class="stat"><b id="comparable-count">—</b><span>可比较范围 / 计划范围</span></div></div>
 <div class="toolbar"><button id="entrants" class="active">新进 App</button><button id="full">完整榜单</button></div>
 <div class="filters"><label>采集时点<select id="run" aria-label="采集时点"></select></label><label>国家<select id="country" aria-label="国家"><option value="">全部国家</option></select></label><label>大类<select id="family" aria-label="大类"><option value="">全部大类</option></select></label><label>分类<select id="category" aria-label="分类"></select></label><label>榜单<select id="chart" aria-label="榜单"><option value="">全部触发榜单</option><option value="free">免费榜</option><option value="grossing">畅销榜</option></select></label><label>最早发布<select id="release-months" aria-label="最早发布"><option value="6">最近6个月</option><option value="5">最近5个月</option><option value="4">最近4个月</option><option value="3">最近3个月</option><option value="2">最近2个月</option><option value="1">最近1个月</option></select></label><label>搜索名称 / 开发者 / ID<input id="search" type="search" placeholder="搜索 App" aria-label="搜索 App"></label><button id="reset">重置</button></div>
-<div id="notice" role="status"></div><div class="tablewrap" role="region" aria-label="榜单列表，可滚动" tabindex="0"><table><thead><tr><th>APP / 开发者</th><th>国家 / 分类</th><th>免费榜</th><th>畅销榜</th><th>触发 / 视图</th><th>评分 / 数量</th><th>最早发布</th><th>版本日期</th><th>采集时间</th></tr></thead><tbody id="rows"></tbody></table><div id="empty" class="empty" hidden>没有匹配记录。可调整筛选条件；待比较和首次发布日期待核实不代表已确认没有新进。</div></div>
+<div id="notice" role="status"></div><div class="tablewrap" role="region" aria-label="榜单列表，可滚动" tabindex="0"><table><thead><tr><th>APP / 开发者</th><th>国家 / 分类</th><th>免费榜</th><th>畅销榜</th><th>触发 / 视图</th><th>评分 / 数量</th><th>最早发布</th><th>版本日期</th><th>采集时间</th><th>比较基准 / 实际跨度</th></tr></thead><tbody id="rows"></tbody></table><div id="empty" class="empty" hidden>没有匹配记录。可调整筛选条件；待比较和首次发布日期待核实不代表已确认没有新进。</div></div>
 <div class="pager"><span id="result-count"></span><div><button id="prev">上一页</button> <span id="page"></span> <button id="next">下一页</button></div></div>
 <details id="release-pending-panel" hidden><summary>首次发布日期待核实（<span id="pending-count">0</span>）</summary><div id="release-pending"></div></details>
-<details><summary>数据覆盖、比较依据与异常</summary><div id="coverage"></div></details><footer>新规则：免费榜或畅销榜新进前80，且七麦最早发布在本轮参考日最近6个自然月内。历史运行保留原规则。只与上一次正式任务比较；缺少完整快照则待比较。<br>榜单在一段时间内逐项采集，各项以实际采集时间为准。数据和报告仅保存在本机。</footer></main>
+<details><summary>数据覆盖、比较依据与异常</summary><div id="coverage"></div></details><footer>新规则：免费榜或畅销榜新进前80，且七麦最早发布在本轮参考日最近6个自然月内。历史运行保留原规则。新轮次每榜单与最近有效完整快照比较，不设回溯期限并标明实际跨度；历史轮次保留原比较口径。<br>榜单在一段时间内逐项采集，各项以实际采集时间为准。数据和报告仅保存在本机。</footer></main>
 <script id="payload" type="application/json">__PAYLOAD__</script>
 <script>
 'use strict';
@@ -37,6 +37,18 @@ function runOptions(wanted){
   if([...$('run').options].some(o=>o.value===wanted))$('run').value=wanted;
 }
 function selected(){return data.runs.filter(r=>$('run').value==='all'||r.run.runId===$('run').value);}
+function spanText(value){
+  let seconds=Math.round(value);const parts=[];
+  for(const [unit,size] of [['天',86400],['小时',3600],['分',60],['秒',1]]){
+    const n=Math.floor(seconds/size);if(n)parts.push(n+unit);seconds%=size;
+  }
+  return parts.join('')||'0秒';
+}
+const fullWhen=t=>new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date(t));
+function baselineText(b){
+  return '基准 '+b.baselineRunId+' / 来源日期 '+b.sourceDate+' / 基准采集 '+fullWhen(b.capturedAt)+
+    (b.elapsedSeconds!==undefined?' → 本轮 '+fullWhen(b.currentCapturedAt)+' / 实际跨度 '+spanText(b.elapsedSeconds):'')+' / 跨过'+b.skippedRuns+'轮';
+}
 function rankText(e,chart){const n=e.ranks?.[chart];return n??(e.rankStates?.[chart]==='outside_top80'?'80以外/未上榜':'缺数');}
 function textCell(tr,value,cls){const td=document.createElement('td');td.textContent=value??'—';if(cls)td.className=cls;tr.append(td);return td;}
 function matches(e){
@@ -57,7 +69,13 @@ function draw(){
     span.textContent=mode==='full'?cfg.charts[e.chart]:(e.triggers||[]).map(x=>cfg.charts[x]).join(' + ');badge.append(span);
     textCell(tr,(e.rating||'—')+' / '+(e.ratingCount||'—'));
     textCell(tr,e.releaseDate||(e.releaseStatus?'待核实':mode==='full'?'未补查':'历史未采集'));
-    textCell(tr,e.latestVersionDate||'—');textCell(tr,when(e.capturedAt));body.append(tr);
+    textCell(tr,e.latestVersionDate||'—');textCell(tr,when(e.capturedAt));
+    const bases=Object.entries(e.comparisonBaselines||{}).filter(([chart])=>!$('chart').value||chart===$('chart').value);
+    const baseCell=textCell(tr,'');baseCell.style.whiteSpace='normal';baseCell.style.minWidth='280px';
+    if(mode==='full')baseCell.textContent='完整榜单视图不作新进判断';
+    else if(!bases.length)baseCell.textContent='历史相邻轮次口径';
+    else for(const [chart,b] of bases){const line=document.createElement('div');line.textContent=cfg.charts[chart]+'：'+baselineText(b);baseCell.append(line);}
+    body.append(tr);
   }
   const pages=Math.max(1,Math.ceil(filtered.length/size));$('page').textContent=(page+1)+' / '+pages;
   $('result-count').textContent='匹配 '+filtered.length+' 条记录'+(mode==='entrants'?' · 同一App在不同采集时点分别保留':'');
@@ -92,6 +110,8 @@ function update(){
   let notice=mode==='full'?'完整榜单视图：展示选定时点和榜单的已采集前80，上线月份筛选仅适用于新进App。':
     `新进视图：${total-comparable} 个排名范围待比较。无排名比较依据时入选数量显示0，具体原因见覆盖说明；已确认数量仅覆盖可比较范围。`;
   if(mode==='entrants'){
+    const latest=runs.filter(r=>r.run.comparisonVersion==='latest_valid_scope_v1');
+    if(latest.length)notice+=' 最近有效完整快照比较，不设回溯期限；回溯比较 '+latest.reduce((n,r)=>n+r.coverage.fallbackScopes,0)+' 个范围，无历史基准 '+latest.reduce((n,r)=>n+r.coverage.noBaselineScopes,0)+' 个，本轮缺数 '+latest.reduce((n,r)=>n+r.coverage.currentMissingScopes,0)+' 个。各榜单实际跨度分别列出，仅表示两个观测端点的差异。';
     if(!modern.length)notice+=' 历史运行未采集最早发布日期，保留原筛选结果，不能按上线月份筛选。';
     else if(!releaseEnabled)notice+=' 所选时点混合新旧规则，保留各轮原口径；请选择新规则时点后使用上线月份筛选。';
     else notice+=` 按各轮开始时的北京时间日期回溯${$('release-months').value}个自然月，包含边界日。`;
@@ -106,10 +126,10 @@ function update(){
   }
   $('coverage').replaceChildren();
   for(const r of runs){
-    const h=document.createElement('p');h.textContent=when(r.run.startedAt)+' · 上次任务 '+(r.run.previousRunId||'无')+' · 排名规则 '+r.run.ruleVersion+' · 程序 '+r.run.codeVersion+
+    const h=document.createElement('p');h.textContent=when(r.run.startedAt)+' · 上一执行轮次 '+(r.run.previousRunId||'无')+' · 排名规则 '+r.run.ruleVersion+' · 程序 '+r.run.codeVersion+
       (r.run.releasePolicy?' · 上线准入 '+r.run.releasePolicy.version+' · 参考日 '+r.run.releasePolicy.referenceDate:' · 历史原规则');$('coverage').append(h);
-    for(const s of r.coverage.scopes.filter(s=>s.status!=='complete'||s.comparison==='unknown')){
-      const line=document.createElement('div');line.textContent=cfg.countries[s.country]+' / '+s.categoryFamily+' / '+s.category+' / '+cfg.charts[s.chart]+'：'+s.status+' · '+(s.reason||'上次缺完整数据或规则不兼容，待比较');$('coverage').append(line);
+    for(const s of r.coverage.scopes.filter(s=>s.baseline||s.status!=='complete'||s.comparison==='unknown')){
+      const line=document.createElement('div');line.textContent=cfg.countries[s.country]+' / '+s.categoryFamily+' / '+s.category+' / '+cfg.charts[s.chart]+'：'+s.status+' · '+(s.reason||s.comparisonReason||(s.comparison==='comparable'?'可比较':'上次缺完整数据或规则不兼容，待比较'))+(s.baseline?' / '+baselineText(s.baseline):'');$('coverage').append(line);
     }
   }
   draw();
