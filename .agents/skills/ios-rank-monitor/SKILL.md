@@ -5,7 +5,7 @@ description: 在本仓库初始化、部署、采集、恢复中断的七麦iOS�
 
 # 七麦榜单监测
 
-从仓库根目录工作。范围以config/monitor.json和处理程序为准，不依赖个人技能或旧聊天。入口：`python3 scripts/monitor.py`。
+从仓库根目录工作。范围以config/monitor.json和处理程序为准，不依赖个人技能或旧聊天。原命令入口为`python3 scripts/monitor.py`；自动同步启用后，定时先走`.local/monitor-launcher.py startup`，后续用其command转发。
 
 当前有apps（24个应用分类、144范围）和games（16个游戏分类、96范围）两个独立分组，美德日iPhone双榜前80及上线准入规则相同。每次任务固定一个profile，所有命令都带--profile apps或--profile games；未指定时仅默认apps，不跨组猜编号。时间均为北京时间02:00、05:00、11:00、17:00，两条任务分别执行，当前均保持暂停。更新既有任务时保留启停及其他设置。旧配置缺少profiles仍按原scanFamilies运行。
 
@@ -17,8 +17,8 @@ description: 在本仓库初始化、部署、采集、恢复中断的七麦iOS�
 
 所有阶段均遵守下方“命令失败与退出说明”；一次命令或工具失败不是本轮完成依据。
 
-1. 确认本次profile，再运行带该profile的doctor后先start登记或领取正式轮次，再检查内置浏览器和登录；读本机工具文档。登录受阻也保留同一正式轮次等待恢复。
-2. start返回runId与本次执行令牌。令牌按profile与formal/test分目录，应用保留.local/tokens/<mode>，游戏使用.local/tokens/games/<mode>，同编号并存的命令必须明确--mode，并保持本次--profile；旧共享令牌仅唯一归属可迁移，歧义拒绝，不猜测或手工复制。当前latest_valid_scope_v1在登记时固化每范围最近兼容的归档完整前80基准，不设回溯期限；处理程序保存baselines.json及manifest摘要，不由代理手工挑基准。cancelled=true表示已完成用户此前请求的取消归档，只报告取消结果和已有报告、按原归档邮件规则显式处理，不进入采集或再次start；resumed=true表示优先继续旧轮，不开新轮；skipped=true表示仍有执行者，结束此次触发、不修改旧轮或发邮件。租约15分钟只控制执行权，不是运行期限；保存、resume、progress续约，长操作前后主动续约。过期可由start接管并换令牌，旧执行者收到令牌错误应停止，不能读取新令牌争抢。小样本只用`start --mode test`。
+1. 确认本次profile；定时startup已在锁内完成doctor/start时直接处理返回run，不重复start。手工不走startup时先运行本组doctor/start登记或领取正式轮次，再检查内置浏览器和登录；读本机工具文档。登录受阻也保留同一正式轮次等待恢复。
+2. start返回runId与本次执行令牌；定时startup的run不回显token，只对本次已领取执行权返回tokenFile，可读一次并保留本次变量，不在失权后重读新令牌。令牌按profile与formal/test分目录，应用保留.local/tokens/<mode>，游戏使用.local/tokens/games/<mode>，同编号并存的命令必须明确--mode，并保持本次--profile；旧共享令牌仅唯一归属可迁移，歧义拒绝，不猜测或手工复制。当前latest_valid_scope_v1在登记时固化每范围最近兼容的归档完整前80基准，不设回溯期限；处理程序保存baselines.json及manifest摘要，不由代理手工挑基准。cancelled=true表示已完成用户此前请求的取消归档，只报告取消结果和已有报告、按原归档邮件规则显式处理，不进入采集或再次start；resumed=true表示优先继续旧轮，不开新轮；skipped=true表示仍有执行者，结束此次触发、不修改旧轮或发邮件。租约15分钟只控制执行权，不是运行期限；保存、resume、progress续约，长操作前后主动续约。过期可由start接管并换令牌，旧执行者收到令牌错误应停止，不能读取新令牌争抢。小样本只用`start --mode test`。
 3. 读[网页流程](references/browser-workflow.md)，用正常导航、滚动和只读DOM提取。pending列剩余可执行范围；每个完整范围立即ingest。来源日期必须等于start/resume返回的固定sourceDate，跨天用公开日期控件选择该日；源站明确不提供该日才mark缺数，不混入新一天榜单。单项真实失败用唯一attemptId记账，重发保留原ID。不积攒全部数据后才保存。
 4. 榜单保存结束后，对带releasePolicy的新轮次调用prepare-release；程序计算新进候选、复用已核实缓存并返回按国家＋App ID去重的pending清单。只有pending中的App需要补查。首次基线或零候选不额外访问详情页。
 5. 按网页流程读取每个候选详情头部明确标注的“最早发布”，使用assets/read-qimai-release.js取得真实URL、App ID、国家、标签、原文和日期，立即ingest-release。不能拿版本日期代替，也不按名次或名称推算。单项未知或解析失败用unavailable/failed并写原因；全局登录受阻转suspend。未知单列，不进入主列表。
@@ -26,6 +26,16 @@ description: 在本仓库初始化、部署、采集、恢复中断的七麦iOS�
 7. progress确认canFinalize=true才finalize；有可执行排名/日期或全局阻塞时程序拒绝提前归档。单项重试耗尽、明确缺数可部分/失败归档，未知不等于零；仅用户明确取消才abort，不能作为自动兜底。取消意图持久化为cancelling；中断恢复只完成取消，不继续采集，progress取消中不能按普通待办处理。旧running+abortReason也按取消意图恢复；终态partial/failed带cancelled标记并显示原因。取消恢复标记保留到报告生成和清理成功；终态后残留同轮标记的start只补报告/清理并返回原取消结果，不新建轮次或重写封存内容。取消未封存不渲染、不发信。恢复旧轮完成后等下一个正常时点，不在同一次触发再开新轮。历史无executionPolicy的记录保留旧窗口语义，不重算。渲染失败保留已封存数据，用render离线重建。
 8. 正式browser轮次封存后显式调用`mail-send RUN_ID`，仅使用本轮runId；零入选、基线、部分完成、失败也发送摘要及全部已确认入选App，详情可点击。未配置/禁用明确跳过，不能为发信擅自填账号或开启开关。submitted为服务器已接受；unknown/busy/failed/partial按返回结果如实报告，unknown先人工核对，不删除记录、自动重发或重新采集。测试和旧版导入不能发信。finalize、render、import本身不发信；渲染失败但已封存可单独发信。重复启动被跳过时不发信，不遍历补发历史。
 9. 展示排名候选、已确认入选、超过一年排除（旧轮按其固化周期）、日期待核实、完整/可比较范围、回溯范围、无基准/本轮缺数及失败原因；按处理结果说明各榜单基准、实际采集时间和比较跨度，以及各收件人的脱敏发送结果。无排名比较依据时数量显示0，并说明基线或缺数及待比较范围；原始未知状态保留。已有排名候选但日期全部未知时，入选数量仍显示待核实。完成消息必须提供已存在的本轮report.html和本组总览（apps为data/index.html，games为data/games/index.html）的绝对路径Markdown链接，标题为“打开本轮报告”“历史总览”。跳过启动不虚构新报告，不宣称全球同步瞬时快照。
+
+## 启动前同步
+
+首次用python3 scripts/launcher.py install --enable-update安装本机稳定启动器；它保留已有.local/update.json。定时每次先执行python3 .local/monitor-launcher.py startup --profile apps或games，之后重新读取本skill及docs/run-apps.md或run-games.md，不沿用旧适配器/变量。所有后续本地命令走python3 .local/monitor-launcher.py command并明确profile。
+
+稳定启动器在读取可更新的程序前取得全仓库锁：startup排他，command共享；同步/检查/新进程doctor/start在同一排他锁内完成。应用、游戏、正式或测试有未结束轮次，或有取消/运行恢复标记，就延期更新，继续当前代码处理原规则。同一同步周期两组各允许登记一轮，第二组首次可加入同版本周期；已完成的一组须等待该周期排空，不能持续补开新轮拖延更新。无周期记录的旧轮和测试先排空；waitingForDrain只汇报等待，不造runId/令牌。恢复旧轮后同次触发不开新轮。新轮记录完整codeCommit；续跑拒绝提交或工作区发生变化，需维护者恢复原版本，不允许中途迁移。旧无codeCommit记录保留兼容口径；首次部署同步功能前先结束旧版本的进行中轮次。
+
+本机策略默认关闭，安装显式开启新配置；enabled控制同步，remote固定命名远程、branch仅main，onFailure默认keep_current（可选stop），timeoutSeconds只限制Git单项等待，validationTimeoutSeconds只限制候选校验单项，不是采集窗口。空闲且工作区干净时仅快进更新；候选在隔离目录编译、双组doctor及完整测试，失败不切换。同步失败若保留当前版必须说明，并不能声称最新版；脏工作区、启用同步时分支不符、损坏历史/更新记录或中断applying标记时不启动新采集，不自动修复或reset。已激活后本机doctor/start失败也停止并说明，不能盲目回退历史或重启新轮。
+
+读取update.status及beforeCommit/afterCommit、失败原因和审计是否保存；blocked无有效run时给出原因/恢复动作，registrationUncertain不表示已成功领取。run.skipped或cancelled沿用原处理。有tokenFile仅表示本次已领取，不得回显；仅在此次领取后读一次，失权不重读。工具仍运行时按session/cell等待，不重复startup。每次总结标明实际代码版本；本机邮箱、数据、投递记录、时点/模型/启停均不自动覆盖。审计在data/updates/audit.jsonl，更新中断标记在.local/update-state.json；仅维护者在确认Git及文件状态后处理，代理不能删除标记绕过。
 
 ## 命令失败与退出说明
 

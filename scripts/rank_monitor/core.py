@@ -67,6 +67,15 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+def repository_commit(root):
+    try:
+        value = subprocess.check_output(['git','rev-parse','--show-toplevel','HEAD'], cwd=root,
+                                        stderr=subprocess.DEVNULL, text=True).splitlines()
+        return value[1] if len(value) == 2 and Path(value[0]).resolve() == root else None
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
 def load_config(root, profile="apps"):
     if profile not in {"apps", "games"}:
         raise ValueError("监测分组必须为apps或games")
@@ -318,6 +327,7 @@ class Store:
         m = self.manifest(run_id)
         if m["status"] not in UNFINISHED:
             raise ValueError("运行已结束，原始快照不可修改")
+        self._assert_code(m)
         is_cancel = cancelling(m)
         if is_cancel and not allow_cancel:
             raise ValueError("轮次正在取消，只能完成取消归档，不能继续采集或暂停续跑")
@@ -335,6 +345,18 @@ class Store:
             raise ValueError("运行标记缺失，请先resume恢复最新任务")
         self._check_token(m, token)
         return m
+
+    def _assert_code(self, manifest):
+        pinned = manifest.get('codeCommit')
+        if pinned:
+            current = repository_commit(self.root)
+            try:
+                dirty = subprocess.check_output(['git','status','--porcelain','--untracked-files=normal'],
+                                                cwd=self.root, stderr=subprocess.DEVNULL, text=True).strip()
+            except (OSError, subprocess.CalledProcessError):
+                dirty = True
+            if current != pinned or dirty:
+                raise ValueError('本轮固定代码版本与当前工作区不一致；请恢复原版本后续跑，不能中途切换')
 
     def _touch(self, run_id):
         write_json(self.base / "active.json", {"runId": run_id, "leaseUpdatedAt": stamp(utcnow())})
@@ -398,6 +420,8 @@ class Store:
             active_path = self.base / "active.json"
             state = self.state()
             latest = self.manifest(state["latestRunId"]) if state["latestRunId"] else None
+            if latest and (latest["status"] in UNFINISHED or active_path.exists()):
+                self._assert_code(latest)
             if origin == "legacy_import" and latest and latest["status"] in UNFINISHED:
                 raise ValueError("已有采集正在进行，不能导入历史或接管其执行权")
             if latest and (cancelling(latest) or (latest.get("cancelled") and active_path.exists()
@@ -432,6 +456,9 @@ class Store:
             run_id = run_id or when.strftime("%Y%m%dT%H%M%S%fZ")
             if not re.fullmatch(r"\d{8}T\d{6}(?:\d{6})?Z", run_id) or any(x["runId"] == run_id for x in state["runs"]):
                 raise ValueError("运行编号无效或已存在")
+            commit = repository_commit(self.root) if origin == "browser" else None
+            if commit:
+                self._assert_code({'codeCommit': commit})
             day = when.astimezone(ZoneInfo(self.config["timezone"])).date().isoformat()
             path = self.base / day / "runs" / run_id
             relative = path.relative_to(self.root).as_posix()
@@ -449,6 +476,8 @@ class Store:
                  "scopes": {scope_key(s): {**s, "status": "pending"}
                             for s in scopes(self.config, include_inactive=origin == "legacy_import" and self.profile == "apps")}}
             if origin == "browser":
+                if commit:
+                    m['codeCommit'] = commit
                 m["comparisonVersion"] = self.config.get("comparisonVersion", COMPARISON_VERSION)
                 if self.config.get("executionPolicy") == EXECUTION_POLICY:
                     m["executionPolicy"] = EXECUTION_POLICY

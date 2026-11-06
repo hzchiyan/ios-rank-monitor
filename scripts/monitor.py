@@ -1,17 +1,36 @@
 #!/usr/bin/env python3
 """Repository-local command line interface. Browser interaction stays in Codex."""
 import argparse
+from contextlib import contextmanager
+import fcntl
 import json
+import os
 from pathlib import Path
 import sys
 
 if sys.version_info < (3, 11):
     raise SystemExit("需要 Python 3.11 或更新版本")
 
-from rank_monitor.core import Store, config_id, scopes
+@contextmanager
+def repository_lock():
+    root = Path(__file__).resolve().parents[1]
+    try:
+        fd = int(os.environ['IOS_RANK_REPOSITORY_LOCK_FD'])
+        opened = os.fstat(fd); expected = (root/'.local/repository.guard').stat()
+        inherited = (opened.st_dev, opened.st_ino) == (expected.st_dev, expected.st_ino)
+    except (KeyError, ValueError, OSError):
+        inherited = False
+    if inherited:
+        yield
+    else:
+        (root/'.local').mkdir(mode=0o700, exist_ok=True)
+        with (root/'.local/repository.guard').open('a') as guard:
+            fcntl.flock(guard, fcntl.LOCK_SH)
+            yield
 
 
 def main():
+    from rank_monitor.core import Store, config_id, scopes
     parser = argparse.ArgumentParser(description="七麦 iOS 榜单本地监测工具")
     sub = parser.add_subparsers(dest="command", required=True)
     importer = sub.add_parser("import-legacy", help="导入本地旧版快照，不访问网络")
@@ -97,7 +116,8 @@ def main():
 
 if __name__ == "__main__":
     try:
-        result = main()
+        with repository_lock():
+            result = main()
         exit_code = result.pop("_exitCode", 0)
         print(json.dumps(result, ensure_ascii=False))
         sys.exit(exit_code)

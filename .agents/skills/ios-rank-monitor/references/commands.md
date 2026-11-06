@@ -115,3 +115,21 @@ mail-preview接受formal/test的已归档轮次，不发信，返回runId/status
 收件人身份只将域名规范化为小写，保留@前部分的大小写；兼容已有发送记录中的大写域名，重复身份或损坏状态停止发送并提示人工核对。DATA后的畸形回复、本地合成的SMTP异常不能证明拒收，归unknown；只有可信的明确拒收才能记failed。
 
 配置错误返回脱敏error且退出非0；SMTP发送结果partial/failed/unknown/busy退出1，其余退出0。任务既要读取退出码，也要读取JSON状态，邮件异常不能引起重采集、重建替代轮次或破坏归档。finalize/render/import均无SMTP副作用。
+
+## 受控启动同步
+
+```sh
+python3 scripts/launcher.py install --enable-update
+python3 .local/monitor-launcher.py startup --profile apps --check-only
+python3 .local/monitor-launcher.py startup --profile apps
+python3 .local/monitor-launcher.py startup --profile games
+python3 .local/monitor-launcher.py command progress RUN_ID --profile apps --token TOKEN
+```
+
+install只原子安装本机启动器和缺失的update.json，不采集、不联网、不覆盖现有策略。check-only离线检查策略、分支、脏状态和两组/模式旧轮，不切换代码、不登记轮次；不是浏览器或线上验收。startup会尝试同步并执行新进程doctor/start，是真实启动入口，不能用于只想检查环境的请求。command在共享锁下加载仓库入口，定时后续命令必须使用它。
+
+startup返回profile、update、doctors、run及auditSaved；update.status为disabled/deferred/current/updated/kept_current/blocked/check_only，beforeCommit/afterCommit记录实际版本，出错后重新读取HEAD，无法确认则afterCommit=null；remoteCommit仅成功取得远程引用时提供。deferred表示有旧轮/恢复标记（含测试），不表示已检查远程最新；kept_current要报告reason，候选失败还可能有validationStep。blocked退出非0，可能有failure.step/profile/detail；start失败可有registrationUncertain，不推断已领取。waitingForDrain=true是本组等待同步周期排空，run.skipped=true且可能无runId，不另外start；同一周期两组可各开一轮。run沿用start结果但去掉token；只有成功领取时增加tokenFile，skipped/cancelled不提供新令牌。审计只保存脱敏状态、提交及编号，不保存令牌；auditSaved=false需明确说明，不能当作任务未登记而重开。
+
+.local/update.json完整字段见config/update.example.json：schemaVersion=1、enabled布尔值、remote命名远程、branch=main、onFailure=keep_current或stop、timeoutSeconds为1～300整数、validationTimeoutSeconds为1～1800整数。默认例子关闭，本机首次安装可显式开启；不把更新策略放入排名配置指纹。
+
+同步只在两组/两种模式没有进行中轮次和残留active标记时执行。只允许快进，不自动stash/reset/clean或修改本机邮箱/任务设置；候选不能跟踪data/或.local等保护路径，拒绝归档符号链接。applying中断标记会阻止盲目启动。同步完成后必须重读skill/本组运行说明，不能在已缓存旧模块的进程中继续执行新代码。旧轮固定codeCommit，新旧混用会拒绝续跑；旧无字段记录仍兼容。

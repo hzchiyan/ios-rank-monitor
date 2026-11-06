@@ -56,13 +56,37 @@ python3 scripts/monitor.py import-legacy /absolute/path/to/old-baseline.json
 
 时间为 **Asia/Shanghai每天02:00、05:00、11:00、17:00**。更新已有任务时保留启停状态；暂停任务不宣称存在已启用的下一次实际运行。启用时检查界面显示的下一运行时间确为北京时间。如果界面仅支持系统时区，先解决时区设置再启用，不能假设当地02:00等于北京时间02:00。
 
-任务描述保存在每台电脑的应用中，不随git pull自动更新。拉取新版本后，在实际运行的电脑将应用/游戏已有任务描述分别同步为docs/automation-prompt.md、docs/automation-games-prompt.md的“可直接复制的任务描述”，保留时点、启停、项目、模型及其他设置，不新建重复任务。描述和skill要求所有命令失败先分类处理、每次可控退出给出原因与最后可信进度；这不增加重试次数、不修改业务规则，也不能保证平台强制中断时仍有总结。部署时用合成测试轮次演练单项失败继续、全局suspend、失去执行权、写入失败及尚无runId的退出说明；不要为演练启动正式采集或真实发信。
+任务描述保存在每台电脑的应用中。首次部署受控同步时，先结束两组旧轮并安装下方启动器，再将应用/游戏已有任务描述分别同步为docs/automation-prompt.md、docs/automation-games-prompt.md的“可直接复制的任务描述”，保留时点、启停、项目、模型及其他设置，不新建重复任务。此后薄描述在startup后重新读取更新后的skill及docs/run-apps.md或docs/run-games.md；业务说明随代码生效，本地调度设置不会被Git更新。更改稳定启动器或薄入口协议时仍需逐机重新部署，不能声称远程代码会自动改另一台电脑的任务设置。描述和skill要求所有命令失败先分类处理、每次可控退出给出原因与最后可信进度；这不增加重试次数、不修改业务规则，也不能保证平台强制中断时仍有总结。部署时用合成测试轮次演练单项失败继续、全局suspend、失去执行权、写入失败及尚无runId的退出说明；不要为演练启动正式采集或真实发信。
 
-新浏览器轮次采用completion_v1，不再因开始后90分钟结束。每次触发先start：已有执行者则skipped等待，中断/阻塞的轮次则resumed继续；恢复旧轮后不在同次触发另开新轮，等下一正常时点。progress仍有可执行项就继续，只有canFinalize=true才归档并发最终邮件。全局受阻suspend保留running，记录人工动作，不发最终邮件；仅用户明确取消才abort；cancelling会持久保留取消意图，start/resume/finalize恢复时只完成取消归档，返回cancelled=true，不恢复采集或另开本次新轮。取消恢复标记保留到报告及清理成功，终态后残留同轮标记时start只补报告/清理、不改封存结果。
+新浏览器轮次采用completion_v1，不再因开始后90分钟结束。每次触发先由稳定启动器检查同步并在锁内start：已有执行者则skipped等待，中断/阻塞的轮次则resumed继续；恢复旧轮后不在同次触发另开新轮，等下一正常时点。progress仍有可执行项就继续，只有canFinalize=true才归档并发最终邮件。全局受阻suspend保留running，记录人工动作，不发最终邮件；仅用户明确取消才abort；cancelling会持久保留取消意图，start/resume/finalize恢复时只完成取消归档，返回cancelled=true，不恢复采集或另开本次新轮。取消恢复标记保留到报告及清理成功，终态后残留同轮标记时start只补报告/清理、不改封存结果。
 
 15分钟租约仅用于避免两个触发同时执行，保存、resume、progress会续约，长浏览器操作前后主动续约；无心跳后start可接管同轮并轮换令牌。应用令牌位于.local/tokens/formal或test目录，游戏令牌位于.local/tokens/games/formal或test目录，正式/测试同编号时明确指定模式；唯一旧令牌可迁移，旧同编号有歧义时拒绝授权，按原租约分别start领取，不手抄共享令牌。租约过期不会封存数据，旧执行者失去令牌必须停止。真实时间戳保留，跨天排名必须用公开日期控件选本轮来源日；明确不再提供该日榜单才记该日缺失。发布日期核实继续，以本轮固定参考日判断。不可访问的历史日期能力需在目标机实际观察，不假设源站支持。历史无executionPolicy的轮次保留旧生命周期，不中途切换。
 
 电脑保持开机联网、桌面应用运行。平台/会话中断仍可能发生，依赖后续触发或手动start续跑，不保证外部平台永不中断。浏览器访问和项目写入权限须在目标机实测；仓库不自动扩大权限。任务不会因clone自动创建，不直接写Codex个人目录的调度配置。
+
+## 启动前更新配置与恢复
+
+只支持macOS/POSIX本地文件锁，不新增运行依赖。首次安装前先完成两组进行中的轮次，再同步本版本；不能先切换代码再要求旧轮使用原版本续跑。
+
+```sh
+python3 scripts/launcher.py install --enable-update
+python3 .local/monitor-launcher.py startup --profile apps --check-only
+python3 .local/monitor-launcher.py startup --profile games --check-only
+```
+
+安装生成权限600的`.local/monitor-launcher.py`和`.local/update.json`，不覆盖已有策略或其他本机配置。示例config/update.example.json默认enabled=false；安装的--enable-update仅在首次创建策略时设true。已有策略需用户在本机编辑，不通过聊天传私密配置。仅安装与check-only不会fetch、登记轮次、采集或发信。
+
+策略固定字段：schemaVersion=1；enabled为布尔；remote默认origin且只接受远程名称；branch固定main；onFailure为keep_current或stop；timeoutSeconds默认60（1～300）控制单次Git联网等待；validationTimeoutSeconds默认300（1～1800）控制每项候选检查。网络与校验超时是更新阶段的保护，不是本轮采集期限。配置不进入排名指纹。需要目标机已有Git远程读取权限，不能在任务中交互输入Git凭据或回显远程地址。
+
+正常触发执行`python3 .local/monitor-launcher.py startup --profile apps`或games。稳定本地入口先取得全仓库排他锁，再加载仓库程序，应用和游戏同时触发也不会在检查与登记之间交错更新。每个同步周期允许两组各登记一次，另一组首次触发可加入同版本周期；一组先完成后须等待另一组结束，不能不断补开新轮推迟同步。无周期记录的旧轮或测试轮先排空，waitingForDrain返回skipped且可能没有本组runId，不采集、不发信；全局空闲后重新同步并开启下一周期。这避免同时触发时一组长期得不到启动。后续本地命令通过`python3 .local/monitor-launcher.py command 子命令 --profile apps|games`，先取得共享锁再加载程序。直接monitor.py仍兼容手动入口；启用自动同步的定时流程必须使用稳定入口。持有命令锁时不会切换代码，浏览器期间由未完成轮次阻止切换。
+
+更新条件包括两组formal/test无未完成轮次和无残留运行标记；未结束测试也会延期，须先按原测试流程完成。只抓取指定远程main；本地需在main、无跟踪/非忽略未跟踪变更，且能快进。候选导出到data/updates/checks的临时目录，拒绝跟踪data/.local/.env等保护路径和链接文件，在不复制真实数据/凭据的隔离副本执行编译、两组doctor及完整测试，通过后才激活。隔离检查不替代目标机历史、浏览器或账号验收。激活后以新进程执行实际双组doctor，再start本组；doctor或start失败即停止并输出步骤/原因，不冒充已开轮。
+
+startup只对本次已领取执行权返回tokenFile，不输出token；读取一次供后续命令使用，不在失权后重读。run.skipped不写旧轮，run.cancelled只处理原取消归档；无run或registrationUncertain时不另造编号，不重复start，先核对持久化状态。两组新轮记录完整codeCommit，程序拒绝在不同提交或脏工作区续跑。无该字段的旧轮仍兼容原行为，不能据此承诺旧轮已经锁定版本。
+
+状态updated/current/deferred/disabled/kept_current均明确返回；后三者不能称已同步最新版。默认仅激活前fetch/候选检查失败且工作区完整未变时keep_current，继续本地版本；stop则不启动。脏工作区、错误分支、损坏历史、激活中断会阻止启动。不强制reset、不stash、不clean、不覆盖本地配置；由维护者检查原因后修复。
+
+`.local/update-state.json`保存validating/applying/ready阶段及cohort的提交和两组已登记编号。validating中断可在下次重新校验；激活出错会重新读取实际HEAD，读取失败则afterCommit=null并说明未知，不能将旧编号当作实际版本；applying中断或状态损坏必须人工检查HEAD、工作区和两组轮次，不能盲删标记继续或自动回滚。激活后真实doctor不通过也停止，需要维护者修复已选版本/历史兼容性。全程使用data/updates/audit.jsonl记脱敏状态、提交编号及已确认runId；auditSaved=false须说明审计落盘失败，不能因而重复登记。候选临时目录正常结束自动清理，进程强制中断留下的目录由维护者确认无执行者后处理。日志、检查和审计只在本地，不上传。
 
 ## 5. 无记忆迁移验收
 

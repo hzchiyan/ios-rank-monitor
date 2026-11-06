@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "enabled": false,
+  "remote": "origin",
+  "branch": "main",
+  "onFailure": "keep_current",
+  "timeoutSeconds": 60,
+  "validationTimeoutSeconds": 300
+}
