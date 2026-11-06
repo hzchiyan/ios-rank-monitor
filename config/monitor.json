@@ -20,6 +20,10 @@
     "17:00"
   ],
   "scanFamilies": ["应用"],
+  "profiles": {
+    "apps": {"scanFamilies": ["应用"]},
+    "games": {"scanFamilies": ["游戏"]}
+  },
   "executionPolicy": "completion_v1",
   "comparisonVersion": "latest_valid_scope_v1",
   "categories": [

@@ -15,7 +15,7 @@ import ssl
 import stat
 
 from .core import digest, read_json, stamp, utcnow, write_json
-from .reports import clock, count, entry_baselines, release_period, report_count, write_text
+from .reports import clock, count, entry_baselines, release_period, report_count, report_title, write_text
 
 
 class MailError(ValueError):
@@ -109,7 +109,7 @@ def render_mail(report, config):
     status = '人工取消' if run.get('cancelled') else {'complete': '完整完成', 'partial': '部分完成', 'failed': '失败'}[run['status']]
     started = clock(run['startedAt'])
     confirmed = report_count(report)
-    subject = f"iOS 榜单监测｜{started}｜{status}｜入选{confirmed}"
+    subject = f"{report_title(run)}｜{started}｜{status}｜入选{confirmed}"
     release = run.get('releasePolicy')
     policy_text = (f"上线准入：七麦最早发布 {release['windowStarts'][str(release['months'])]} 至 {release['referenceDate']}（包含边界日）。"
                    if release else '本轮为历史规则，未采集首次发布日期。')
@@ -127,7 +127,7 @@ def render_mail(report, config):
                     ('超过'+release_period(release)+'排除', count(counts.get('excludedOlder'))),
                     ('首次发布日期待核实', count(counts.get('pendingRelease')))]
     notice = ('首次轮次建立基线；无排名比较依据时数量显示0，不表示已确认没有新进。'
-              if not run.get('previousRunId') else '已确认数量仅覆盖可比较范围，缺数及待比较不等于确认没有新进。')
+              if not run.get('previousRunId') and not coverage['comparableScopes'] else '已确认数量仅覆盖可比较范围，缺数及待比较不等于确认没有新进。')
     if release and counts.get('pendingRelease'):
         notice += ' 首次发布日期待核实的候选未进入入选列表。'
     if latest:
@@ -211,7 +211,8 @@ class MailDelivery:
         path = self.store.locate(run_id)/'mail/content.json'
         if path.exists():
             content = _json(path, '冻结邮件正文')
-            if content.get('runId') != run_id or content.get('hash') != digest(content.get('body')):
+            if (content.get('runId') != run_id or content.get('profile', 'apps') != self.store.profile
+                    or content.get('hash') != digest(content.get('body'))):
                 raise MailError('冻结邮件正文与运行编号或内容摘要不一致')
             return content['body']
         return render_mail(self.store.archived_report(run_id), self.store.manifest(run_id)['config'])
@@ -232,7 +233,10 @@ class MailDelivery:
         if config['status'] != 'ready':
             return {'runId': run_id, **config}
         self.store.local.mkdir(mode=0o700, exist_ok=True)
-        key = digest({'mode': self.store.mode, 'runId': run_id})[:32]
+        identity = {'mode': self.store.mode, 'runId': run_id}
+        if self.store.profile != 'apps':
+            identity['profile'] = self.store.profile
+        key = digest(identity)[:32]
         with (self.store.local/f'mail-{key}.guard').open('a') as guard:
             try:
                 fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -248,10 +252,12 @@ class MailDelivery:
         body = self._content(run_id)
         content_hash = digest(body)
         if not (folder/'content.json').exists():
-            write_json(folder/'content.json', {'runId': run_id, 'hash': content_hash, 'body': body})
+            write_json(folder/'content.json', {'runId': run_id, 'profile': self.store.profile, 'hash': content_hash, 'body': body})
         path = folder/'delivery.json'
-        state = _json(path, '邮件发送记录') if path.exists() else {'schemaVersion': 1, 'runId': run_id, 'contentHash': content_hash, 'recipients': {}}
-        if state.get('schemaVersion') != 1 or state.get('runId') != run_id or state.get('contentHash') != content_hash or not isinstance(state.get('recipients'), dict):
+        state = _json(path, '邮件发送记录') if path.exists() else {'schemaVersion': 1, 'runId': run_id, 'profile': self.store.profile, 'contentHash': content_hash, 'recipients': {}}
+        if (state.get('schemaVersion') != 1 or state.get('runId') != run_id
+                or state.get('profile', 'apps') != self.store.profile or state.get('contentHash') != content_hash
+                or not isinstance(state.get('recipients'), dict)):
             raise MailError('邮件发送记录不兼容或与冻结正文不一致，停止以避免重复发送')
         normalized = {}
         for address, record in state['recipients'].items():

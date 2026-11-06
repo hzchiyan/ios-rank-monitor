@@ -57,7 +57,14 @@ def baseline_text(baseline):
             f"基准采集 {clock(baseline['capturedAt'])}（北京时间）")
     if "elapsedSeconds" in baseline:
         text += f"；本轮采集 {clock(baseline['currentCapturedAt'])}；实际跨度 {duration(baseline['elapsedSeconds'])}"
+    if baseline.get("baselineProfile"):
+        text += "；基准来源：" + ("应用历史" if baseline["baselineProfile"] == "apps" else "游戏")
     return text + f"；跨过{baseline['skippedRuns']}轮"
+
+
+def report_title(run):
+    family = {"apps": "应用", "games": "游戏"}.get(run.get("profile"), "")
+    return f"iOS {family}榜单监测"
 
 
 def entry_baselines(entry, config):
@@ -73,7 +80,7 @@ def markdown_report(report, config):
     r, coverage = report["run"], report["coverage"]
     policy = r.get("releasePolicy")
     latest = r.get("comparisonVersion") == "latest_valid_scope_v1"
-    lines = [f"# iOS 榜单监测 · {clock(r['startedAt'])}", "",
+    lines = [f"# {report_title(r)} · {clock(r['startedAt'])}", "",
              "[返回日期页](../../index.md) · [返回总览](../../../index.md) · [筛选查看](report.html)", "",
              f"- 运行编号：{r['runId']}；状态：{r['status']}；来源：{r['origin']}",
              f"- 上一任务：{r['previousRunId'] or '无（建立基线）'}；规则版本：{r['ruleVersion']}",
@@ -152,7 +159,8 @@ def render_all(store):
         days[m["date"]].append({**report, "snapshots": store.snapshots(m["runId"])})
     dates = sorted(days, reverse=True)
     template = (store.root / "assets/report.html").read_text(encoding="utf-8")
-    overview = ["# iOS 榜单监测总览", "", "[打开本地浏览入口](index.html)", "", "数据仅保存本机；时间均为北京时间。", "", "| 日期 | 最近采集 | 次数 | 最近已确认新进 |", "|---|---|---:|---:|"]
+    title = report_title({"profile": store.profile})
+    overview = [f"# {title}总览", "", "[打开本地浏览入口](index.html)", "", "数据仅保存本机；时间均为北京时间。", "", "| 日期 | 最近采集 | 次数 | 最近已确认新进 |", "|---|---|---:|---:|"]
     archive_links = []
     for day in dates:
         runs = days[day]
@@ -162,8 +170,8 @@ def render_all(store):
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
         update_day = not daily_contains(date_path, {r["run"]["runId"] for r in runs})
         if update_day:
-            write_text(date_path / "index.html", template.replace("__PAYLOAD__", encoded).replace("__DATE__", day))
-        lines = [f"# {day} · iOS 榜单监测", "", "[返回总览](../index.md) · [筛选查看](index.html)", "", "| 北京时间 | 状态 | 完整榜单 | 可比较 | 已确认新进 | 报告 |", "|---|---|---:|---:|---:|---|"]
+            write_text(date_path / "index.html", template.replace("__PROFILE_LABEL__", store.label).replace("__PROFILE_NOUN__", "游戏" if store.profile == "games" else "App").replace("__PAYLOAD__", encoded).replace("__DATE__", day))
+        lines = [f"# {day} · {title}", "", "[返回总览](../index.md) · [筛选查看](index.html)", "", "| 北京时间 | 状态 | 完整榜单 | 可比较 | 已确认新进 | 报告 |", "|---|---|---:|---:|---:|---|"]
         for r in reversed(runs):
             meta, cov = r["run"], r["coverage"]
             status = "人工取消" if meta.get("cancelled") else meta["status"]
@@ -174,7 +182,7 @@ def render_all(store):
         archive_links.append(f'<li><a href="{day}/index.html"><strong>{day}</strong><span>{len(runs)} 次采集 · 最近新进 {report_count(latest)}</span></a></li>')
     write_text(store.base / "index.md", "\n".join(overview) + "\n")
     write_text(store.base / "index.html", '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-               '<title>iOS 榜单监测 · 日期总览</title><style>body{background:#f6f5f0;color:#172f3b;font:16px "PingFang SC",sans-serif;max-width:850px;margin:70px auto;padding:24px}h1{font:40px "Songti SC",serif}small{letter-spacing:3px;color:#426e76}ul{padding:0;list-style:none}li a{color:inherit;text-decoration:none;display:flex;justify-content:space-between;border-top:1px solid #cad4d2;padding:24px 0}span,p{color:#53666c}a:focus{outline:2px solid #167684}</style>'
-               '<small>APP SIGNALS / LOCAL ARCHIVE</small><h1>iOS 榜单监测</h1><p>选择日期，再按时点、国家和分类筛选。全部数据仅保存在本机。</p><ul>'
+               '<title>' + title + ' · 日期总览</title><style>body{background:#f6f5f0;color:#172f3b;font:16px "PingFang SC",sans-serif;max-width:850px;margin:70px auto;padding:24px}h1{font:40px "Songti SC",serif}small{letter-spacing:3px;color:#426e76}ul{padding:0;list-style:none}li a{color:inherit;text-decoration:none;display:flex;justify-content:space-between;border-top:1px solid #cad4d2;padding:24px 0}span,p{color:#53666c}a:focus{outline:2px solid #167684}</style>'
+               '<small>APP SIGNALS / LOCAL ARCHIVE</small><h1>' + title + '</h1><p>选择日期，再按时点、国家和分类筛选。全部数据仅保存在本机。</p><ul>'
                + "".join(archive_links) + '</ul><p><a href="index.md">Markdown 总览</a></p></html>')
     return {"renderedRuns": sum(len(x) for x in days.values()), "dates": dates, "overview": (store.base / "index.md").relative_to(store.root).as_posix()}

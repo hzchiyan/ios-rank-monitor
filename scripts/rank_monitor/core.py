@@ -67,8 +67,22 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
-def load_config(root):
+def load_config(root, profile="apps"):
+    if profile not in {"apps", "games"}:
+        raise ValueError("监测分组必须为apps或games")
     c = read_json(root / "config/monitor.json")
+    has_profiles = "profiles" in c
+    profiles = c.pop("profiles", None)
+    if has_profiles:
+        if (not isinstance(profiles, dict) or set(profiles) != {"apps", "games"}
+                or any(not isinstance(profiles[p], dict) or set(profiles[p]) != {"scanFamilies"}
+                       or profiles[p]["scanFamilies"] != [family]
+                       for p, family in [("apps", "应用"), ("games", "游戏")])
+                or c.get("scanFamilies") != ["应用"]):
+            raise ValueError("profiles必须分别配置apps应用和games游戏，默认scanFamilies保持应用")
+        c["scanFamilies"] = profiles[profile]["scanFamilies"]
+    elif profile != "apps":
+        raise ValueError("旧配置未声明游戏监测分组")
     if c["schemaVersion"] != SCHEMA or c["cutoff"] != 80 or c["device"] != "iphone":
         raise ValueError("配置格式、前80门槛或设备不符合当前规则")
     if set(c["countries"]) != {"us", "de", "jp"} or set(c["charts"]) != {"free", "grossing"}:
@@ -199,19 +213,25 @@ def normalize_snapshot(raw, expected, config, started_at, test=False, *, fixed_s
 
 
 class Store:
-    def __init__(self, root, mode="formal"):
+    def __init__(self, root, mode="formal", profile="apps"):
         if mode not in ("formal", "test"):
             raise ValueError("运行模式必须为formal或test")
         self.root = Path(root).resolve()
-        self.config = load_config(self.root)
+        self.config = load_config(self.root, profile)
         self.mode = mode
-        self.base = self.root / ("data/test" if mode == "test" else "data")
+        self.profile = profile
+        self.label = "游戏" if profile == "games" else "应用"
+        self.base = self.root / ("data/games" if profile == "games" else "data")
+        if mode == "test":
+            self.base = self.base / "test"
         self.local = self.root / ".local"
+        self.token_dir = self.local / "tokens" / ("games" if profile == "games" else "") / mode
 
     @contextmanager
     def guard(self):
         self.local.mkdir(mode=0o700, exist_ok=True)
-        with (self.local / f"{self.mode}.guard").open("a") as f:
+        prefix = "games-" if self.profile == "games" else ""
+        with (self.local / f"{prefix}{self.mode}.guard").open("a") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             try:
                 yield
@@ -227,6 +247,10 @@ class Store:
             relative = Path(entry["relativePath"])
             if relative.is_absolute() or ".." in relative.parts or not (self.root / relative).resolve().is_relative_to(self.base.resolve()):
                 raise ValueError("历史索引含绝对路径或数据目录外路径，不能直接迁移")
+            resolved = (self.root / relative).resolve()
+            if ((self.mode == "formal" and resolved.is_relative_to((self.base / "test").resolve()))
+                    or (self.profile == "apps" and resolved.is_relative_to((self.root / "data/games").resolve()))):
+                raise ValueError("历史索引路径与监测分组或模式不一致，不能引用测试或另一组数据")
             if entry["runId"] in seen:
                 raise ValueError("历史索引有重复运行编号")
             seen.add(entry["runId"])
@@ -253,10 +277,15 @@ class Store:
         return path
 
     def manifest(self, run_id):
-        return read_json(self.locate(run_id) / "manifest.json")
+        m = read_json(self.locate(run_id) / "manifest.json")
+        if m.get("profile", "apps") != self.profile:
+            raise ValueError("运行记录的监测分组与当前profile不一致")
+        if m.get("mode") != self.mode:
+            raise ValueError("运行记录的模式与当前mode不一致")
+        return m
 
     def _save_token(self, run_id, token, *, retire_legacy=False):
-        p = self.local / "tokens" / self.mode / run_id
+        p = self.token_dir / run_id
         p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         tmp = p.with_name(p.name + ".tmp")
         with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
@@ -265,15 +294,15 @@ class Store:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, p)
-        if retire_legacy:
+        if retire_legacy and self.profile == "apps":
             (self.local / "tokens" / run_id).unlink(missing_ok=True)
 
     def _check_token(self, m, token, *, migrate=True):
         if m.get("mode") != self.mode or m.get("tokenVersion") not in (None, TOKEN_VERSION):
             raise ValueError("运行模式或令牌版本不匹配")
-        p = self.local / "tokens" / self.mode / m["runId"]
-        if not p.exists() and m.get("tokenVersion") is None:
-            other = Store(self.root, "test" if self.mode == "formal" else "formal")
+        p = self.token_dir / m["runId"]
+        if not p.exists() and m.get("tokenVersion") is None and self.profile == "apps":
+            other = Store(self.root, "test" if self.mode == "formal" else "formal", self.profile)
             if any(r["runId"] == m["runId"] for r in other.state()["runs"]):
                 if other.manifest(m["runId"]).get("tokenVersion") is None:
                     raise ValueError("旧令牌同编号归属有歧义，请指定模式并通过start按租约重新领取")
@@ -332,7 +361,7 @@ class Store:
     def _progress(self, m):
         from .releases import ReleaseRecords
         if cancelling(m):
-            return {"runId": m["runId"], "status": m["status"], "sourceDate": m["date"],
+            return {"runId": m["runId"], "profile": self.profile, "status": m["status"], "sourceDate": m["date"],
                     "phase": "cancelling", "canFinalize": False, "pending": [], "release": None,
                     "abortReason": m["abortReason"], "needsAbortFinalization": True,
                     "completedScopes": sum(s["status"] == "complete" for s in m["scopes"].values()),
@@ -342,7 +371,7 @@ class Store:
         if not pending and m.get("releasePolicy") and not m.get("blocked"):
             releases = ReleaseRecords(self).prepare(m)
         ready = not pending and not m.get("blocked") and not (releases and releases["pending"])
-        return {"runId": m["runId"], "sourceDate": m["date"], "status": m["status"],
+        return {"runId": m["runId"], "profile": self.profile, "sourceDate": m["date"], "status": m["status"],
                 "phase": "blocked" if m.get("blocked") else "rankings" if pending else "ready" if ready else "releases",
                 "blocked": m.get("blocked"), "canFinalize": ready, "pending": pending,
                 "completedScopes": sum(s["status"] == "complete" for s in m["scopes"].values()),
@@ -356,7 +385,7 @@ class Store:
         m.pop("blocked", None)
         self._reconcile(m)
         self._touch(m["runId"])
-        return {"runId": m["runId"], "token": token, "resumed": True,
+        return {"runId": m["runId"], "profile": self.profile, "token": token, "resumed": True,
                 "relativePath": self.locate(m["runId"]).relative_to(self.root).as_posix(),
                 "previousRunId": m["previousRunId"], "plannedScopes": len(m["scopes"]),
                 "sourceDate": m["date"], "executionPolicy": EXECUTION_POLICY,
@@ -413,12 +442,12 @@ class Store:
             except (OSError, subprocess.CalledProcessError):
                 version = "uncommitted"
             m = {"schemaVersion": SCHEMA, "runId": run_id, "previousRunId": state["latestRunId"],
-                 "mode": self.mode, "origin": origin, "status": "running", "date": day, "tokenVersion": TOKEN_VERSION,
+                 "mode": self.mode, "profile": self.profile, "origin": origin, "status": "running", "date": day, "tokenVersion": TOKEN_VERSION,
                  "startedAt": stamp(when), "finishedAt": None, "timezone": self.config["timezone"],
                  "codeVersion": version, "ruleVersion": self.config["ruleVersion"],
                  "configFingerprint": config_id(self.config), "config": self.config,
                  "scopes": {scope_key(s): {**s, "status": "pending"}
-                            for s in scopes(self.config, include_inactive=origin == "legacy_import")}}
+                            for s in scopes(self.config, include_inactive=origin == "legacy_import" and self.profile == "apps")}}
             if origin == "browser":
                 m["comparisonVersion"] = self.config.get("comparisonVersion", COMPARISON_VERSION)
                 if self.config.get("executionPolicy") == EXECUTION_POLICY:
@@ -433,7 +462,7 @@ class Store:
             write_json(self.base / "state.json", state)
             self._prepare_baselines(m)
             write_json(active_path, {"runId": run_id, "leaseUpdatedAt": stamp(utcnow())})
-            result = {"runId": run_id, "token": token, "relativePath": relative, "previousRunId": m["previousRunId"], "plannedScopes": len(m["scopes"])}
+            result = {"runId": run_id, "profile": self.profile, "token": token, "relativePath": relative, "previousRunId": m["previousRunId"], "plannedScopes": len(m["scopes"])}
             if completion_driven(m):
                 result.update(executionPolicy=EXECUTION_POLICY, sourceDate=day,
                               leaseExpiresAt=stamp(utcnow() + timedelta(minutes=WORKER_LEASE_MINUTES)))
@@ -541,7 +570,7 @@ class Store:
             active = self.base / "active.json"
             if active.exists():
                 active.unlink()
-            return {"runId": run_id, "status": "running", "blocked": m["blocked"], "resumable": True}
+            return {"runId": run_id, "profile": self.profile, "status": "running", "blocked": m["blocked"], "resumable": True}
 
     def prepare_release(self, run_id, token):
         from .releases import ReleaseRecords
@@ -666,7 +695,7 @@ class Store:
             return self._finish_abort(m)
 
     def _abort_result(self, m):
-        return {"runId": m["runId"], "mode": self.mode, "status": m["status"], "cancelled": True,
+        return {"runId": m["runId"], "mode": self.mode, "profile": self.profile, "status": m["status"], "cancelled": True,
                 "abortReason": m["abortReason"], "report": (self.locate(m["runId"])/"report.md").relative_to(self.root).as_posix()}
 
     def _finish_abort(self, m):
@@ -774,6 +803,7 @@ class Store:
         if cached.exists():
             report = read_json(cached)
             if (report.get("schemaVersion") != SCHEMA or report.get("run", {}).get("runId") != run_id
+                    or report["run"].get("profile", "apps") != self.profile
                     or report["run"].get("status") != m["status"]):
                 raise ValueError("历史封存报告与运行记录不一致，不能重新计算覆盖")
             return report

@@ -19,6 +19,7 @@ class Harness(unittest.TestCase):
         # Ranking v1 fixtures remain independent of the separately tested release policy.
         config_path = self.root / "config/monitor.json"
         config = json.loads(config_path.read_text())
+        config.pop("profiles", None)
         config.pop("releasePolicy", None)
         # Existing ranking fixtures describe the historical 240-scope configuration.
         config.pop("scanFamilies", None)

@@ -1,6 +1,8 @@
 # 命令与数据接口
 
-脚本自行定位仓库。默认正式模式，测试加`--mode test`，历史完全分离。TOKEN是本次执行权令牌，不是七麦密码，不复制到报告。start领取/接管时返回令牌并保存在`.local/tokens/formal/RUN_ID`或`.local/tokens/test/RUN_ID`，权限600，manifest记录tokenVersion=mode_v1。同编号同时存在两种模式时必须显式--mode formal/test，不能默认猜模式。新执行者必须经start领取，不能直接读取别的执行者令牌抢占；工具重置仍持有本次执行权时可用原令牌resume。
+所有子命令支持--profile apps|games，默认apps。游戏的doctor/start/pending/resume/ingest/mark/progress/suspend/abort/日期补查/finalize/render/mail-preview/mail-send始终显式带--profile games，不跨组自动查找编号。
+
+脚本自行定位仓库。默认正式模式，测试加`--mode test`，历史完全分离。TOKEN是本次执行权令牌，不是七麦密码，不复制到报告。start领取/接管时返回令牌并保存在`.local/tokens/formal/RUN_ID`或`.local/tokens/test/RUN_ID`，权限600；游戏路径在tokens后增加games层。新manifest记录profile及tokenVersion=mode_v1，缺少profile的旧记录归属apps。同编号同时存在两种模式时必须显式--mode formal/test，不能默认猜模式。新执行者必须经start领取，不能直接读取别的执行者令牌抢占；工具重置仍持有本次执行权时可用原令牌resume。
 
 ```sh
 python3 scripts/monitor.py doctor
@@ -18,17 +20,19 @@ python3 scripts/monitor.py render
 
 `ingest`/`mark`省略`--input`从标准输入读取JSON。在工具编程环境写JSON，再调用命令，避免把网页文本拼进shell。正式采集使用实际时间；`--at`只用于独立测试，不能用来伪造错过时点。
 
+CLI捕获到的输入/存储等异常会输出JSON error并退出1；退出非0不等于本轮已结束，也不代表失败尝试已记账。调用方同时检查退出码、可用JSON和stderr，保留脱敏错误正文，按SKILL.md“命令失败与退出说明”处理；不要只在成功退出后解析JSON，导致异常掩盖正文。无法读取结果或批次中断时，先核对progress/pending与已保存记录；不要盲目换attemptId重发。没有runId、失去执行权或本地命令不可用时，明确说明不能执行对应恢复/暂停命令，不虚构成功。退出说明不替代finalize，也不放宽归档或邮件条件。
+
 `start`返回`runId, token, relativePath, previousRunId, plannedScopes`。新浏览器轮次记录executionPolicy=completion_v1，额外返回固定sourceDate、leaseExpiresAt，没有deadlineAt。已有未结束新轮时优先恢复同runId：执行者仍有15分钟租约则skipped=true且不返回令牌；租约过期、suspend或标记丢失时接管返回resumed=true并轮换令牌，旧令牌立即失效。租约只控制执行权，绝不封存轮次。过期但尚未被接管时原令牌仍可续约；接管轮换令牌后原令牌不可用。恢复完成后同次触发不再start新轮。
 
 resume恢复保存的快照状态及待办，progress返回phase（rankings/releases/blocked/ready）、pending、completedScopes、plannedScopes、release及canFinalize。保存、resume、progress续租；长浏览器操作前后应在15分钟内主动续约。blocked状态的progress仅检查进度、不恢复执行权，resume或下一次start才恢复。suspend记录blocked/lastBlock，保留running并释放执行权，不消耗各项重试，不归档或发邮件。全局登录、工具、网络受阻应使用它，不能批量失败替代。
 
 pending只列新轮尚可执行的榜单范围，包含attemptsRemaining；完成、明确缺数及重试耗尽项不再列入。每次先完成全部榜单，再执行日期补查；progress会在排名结束后固化可用日期缓存并给出日期pending。还有可执行项或全局阻塞时finalize拒绝归档。只有用户明确取消，才可执行`abort RUN_ID --token TOKEN --reason "用户取消原因"`封存不完整轮次；日常任务不能用abort绕过检查。
 
-正常采集按scanFamilies生成计划，当前仅应用共144范围；缺少开关的旧配置默认为应用与游戏共240范围。当前配置comparisonVersion=latest_valid_scope_v1，新浏览器轮次按各范围从本轮之前的归档历史逆序找最近兼容完整快照，不设回溯期限。排名规则、设备、前80门槛、时区和分类定义须一致；已归档的部分轮次中完整范围可用，正式/测试隔离。缺数和不兼容范围跳过，存储损坏停止并报错；没有兼容历史则建立该范围基线，本轮缺数不能用旧数据填充。
+config/monitor.json的profiles固定apps.scanFamilies=[应用]、games.scanFamilies=[游戏]，默认scanFamilies保持应用供旧入口兼容。程序生成当前组生效配置：apps144、games96；另一组配置不进入当前组指纹。旧配置缺少profiles仍按原scanFamilies（缺省两类240范围）运行，未声明profiles时不能启动games。当前配置comparisonVersion=latest_valid_scope_v1，新浏览器轮次按各范围从本轮之前的归档历史逆序找最近兼容完整快照，不设回溯期限。排名规则、设备、前80门槛、时区和分类定义须一致；已归档的部分轮次中完整范围可用，正式/测试隔离。缺数和不兼容范围跳过，存储损坏停止并报错；没有兼容历史则建立该范围基线，本轮缺数不能用旧数据填充。
 
-登记时保存baselines.json（schemaVersion、comparisonVersion、runId、scopes）及manifest.comparisonBaselinesHash。每范围记录baselineRunId、sourceDate、capturedAt、snapshotHash、skippedRuns或null。首次固化中断可恢复；摘要已保存后文件丢失/改变不得重选。当前comparisonBaselines逐触发榜单提供currentCapturedAt/currentSourceDate/elapsedSeconds，coverage.scopes.baseline保留全部范围依据。coverage新增fallbackScopes（已比较且跨过轮次）、noBaselineScopes（本轮完整但无基准）、currentMissingScopes；前两项与本轮缺数分开报告。previousRunId继续表示上一执行轮次。
+登记时保存baselines.json（schemaVersion、comparisonVersion、runId、scopes）及manifest.comparisonBaselinesHash。每范围记录baselineRunId、sourceDate、capturedAt、snapshotHash、skippedRuns或null。游戏额外冻结baselineProfile=apps/games；可只读继承早于本轮的旧游戏快照，缺损不能跳过。应用引用格式保持兼容。首次固化中断可恢复；摘要已保存后文件丢失/改变不得重选。当前comparisonBaselines逐触发榜单提供currentCapturedAt/currentSourceDate/elapsedSeconds，coverage.scopes.baseline保留全部范围依据。coverage新增fallbackScopes（已比较且跨过轮次）、noBaselineScopes（本轮完整但无基准）、currentMissingScopes；前两项与本轮缺数分开报告。previousRunId继续表示上一执行轮次。
 
-旧shared_scopes_v1仍严格相邻；无版本旧轮仍整体指纹比较。缺少comparisonVersion配置时默认shared_scopes_v1。运行中变更开关会被配置指纹校验拒绝。import-legacy按完整目录导入，不裁剪旧游戏快照。
+旧shared_scopes_v1仍严格相邻；无版本旧轮仍整体指纹比较。缺少comparisonVersion配置时默认shared_scopes_v1。运行中变更开关会被配置指纹校验拒绝。apps的import-legacy按完整目录导入，不裁剪旧游戏快照；games仅接受游戏范围，拒绝应用快照。
 
 ## 令牌兼容与取消恢复
 

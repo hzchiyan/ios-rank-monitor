@@ -36,6 +36,8 @@ def main():
             p.add_argument("--reason", required=True)
         if name in ["ingest", "mark", "ingest-release"]:
             p.add_argument("--input", help="JSON文件；省略时读取标准输入")
+    for command in sub.choices.values():
+        command.add_argument("--profile", choices=["apps", "games"], default="apps")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     if args.command == "mail-check":
@@ -43,7 +45,7 @@ def main():
         return check_mail(root)
     if args.command in {"mail-preview", "mail-send"}:
         from rank_monitor.mailer import MailDelivery
-        delivery = MailDelivery(Store(root, getattr(args, "mode", "formal")))
+        delivery = MailDelivery(Store(root, getattr(args, "mode", "formal"), args.profile))
         if args.command == "mail-preview":
             return delivery.preview(args.run_id)
         result = delivery.send(args.run_id)
@@ -51,19 +53,19 @@ def main():
         return result
     mode = args.mode
     if mode is None and getattr(args, "run_id", None):
-        test = Store(root, "test")
+        test = Store(root, "test", args.profile)
         in_test = any(r["runId"] == args.run_id for r in test.state()["runs"])
-        in_formal = any(r["runId"] == args.run_id for r in Store(root).state()["runs"])
+        in_formal = any(r["runId"] == args.run_id for r in Store(root, profile=args.profile).state()["runs"])
         if in_test and in_formal:
             raise ValueError("运行编号同时存在正式和测试模式，请显式指定--mode formal或--mode test")
         mode = "test" if in_test else "formal"
-    store = Store(root, mode or "formal")
+    store = Store(root, mode or "formal", args.profile)
     if args.command == "import-legacy":
         from rank_monitor.legacy import import_legacy
         return import_legacy(store, Path(args.path))
     if args.command == "doctor":
         store.check_history()
-        return {"ready": True, "repositoryRoot": str(root), "plannedScopes": len(scopes(store.config)),
+        return {"ready": True, "repositoryRoot": str(root), "plannedScopes": len(scopes(store.config)), "profile": store.profile,
                 "configFingerprint": config_id(store.config), "python": sys.version.split()[0],
                 "browserVerified": False, "note": "本命令仅检查本地程序；浏览器、账号和定时权限必须由Codex在目标机实测"}
     if args.command == "start":

@@ -1,5 +1,5 @@
 """Immutable per-scope references to the latest compatible archived observation."""
-from .core import (UNFINISHED, completion_driven, digest, normalize_snapshot, parse_time,
+from .core import (Store, UNFINISHED, completion_driven, digest, normalize_snapshot, parse_time,
                    read_json, scope_key, shared_scope_compatible, write_json)
 
 LATEST_VERSION = "latest_valid_scope_v1"
@@ -28,6 +28,22 @@ class FrozenBaselines:
             raise ValueError("历史基准快照格式不一致，不能作为完整数据使用")
         return snap
 
+    def _sources(self, m):
+        past = self._past(m)
+        sources = [(self.store, self.store.manifest(r["runId"]), len(past)-1-i)
+                   for i, r in enumerate(past)]
+        if self.store.profile == "games":
+            own_started = [parse_time(item[1]["startedAt"]) for item in sources]
+            legacy = Store(self.store.root, self.store.mode, "apps")
+            for r in legacy.state()["runs"]:
+                previous = legacy.manifest(r["runId"])
+                if (previous["status"] not in UNFINISHED
+                        and parse_time(previous["startedAt"]) < parse_time(m["startedAt"])
+                        and any(s["categoryFamily"] == "游戏" for s in previous["scopes"].values())):
+                    skipped = sum(t > parse_time(previous["startedAt"]) for t in own_started)
+                    sources.append((legacy, previous, skipped))
+        return sorted(sources, key=lambda item: (parse_time(item[1]["startedAt"]), item[0].profile == self.store.profile), reverse=True)
+
     def prepare(self, m):
         path = self.path(m["runId"])
         if m.get("comparisonBaselinesHash"):
@@ -38,11 +54,9 @@ class FrozenBaselines:
             data = read_json(path)
             self._shape(data, m)
         else:
-            past = self._past(m)
             refs = {key: None for key in m["scopes"]}
             unresolved = set(refs)
-            for index in range(len(past)-1, -1, -1):
-                previous = self.store.manifest(past[index]["runId"])
+            for source, previous, skipped in self._sources(m):
                 if previous["status"] in UNFINISHED:
                     raise ValueError("历史轮次尚未归档，不能作为比较基准")
                 wanted = {key for key in unresolved
@@ -50,16 +64,18 @@ class FrozenBaselines:
                           and shared_scope_compatible(m, previous, key)}
                 if not wanted:
                     continue
-                if not (self.store.locate(previous["runId"])/"snapshots.jsonl.gz").is_file():
+                if not (source.locate(previous["runId"])/"snapshots.jsonl.gz").is_file():
                     raise ValueError("历史完整快照归档缺失，不能静默回溯")
-                snaps = {scope_key(s): s for s in self.store.snapshots(previous["runId"])}
+                snaps = {scope_key(s): s for s in source.snapshots(previous["runId"])}
                 for key in wanted:
                     if key not in snaps:
                         raise ValueError("历史完整状态缺少对应快照，不能静默回溯")
                     snap = self._snapshot(snaps[key], previous, key)
                     refs[key] = {"baselineRunId": previous["runId"], "sourceDate": snap["sourceDate"],
                                  "capturedAt": snap["capturedAt"], "snapshotHash": digest(snap),
-                                 "skippedRuns": len(past)-1-index}
+                                 "skippedRuns": skipped}
+                    if self.store.profile == "games":
+                        refs[key]["baselineProfile"] = source.profile
                     unresolved.remove(key)
                 if not unresolved:
                     break
@@ -95,14 +111,21 @@ class FrozenBaselines:
             if ref is None:
                 continue
             run_id = ref["baselineRunId"]
-            if run_id not in past:
+            profile = ref.get("baselineProfile", self.store.profile)
+            if profile not in {self.store.profile, "apps"} or (self.store.profile == "apps" and profile != "apps"):
+                raise ValueError("比较基准的来源分组不受支持")
+            source = self.store if profile == self.store.profile else Store(self.store.root, self.store.mode, profile)
+            if profile == self.store.profile and run_id not in past:
                 raise ValueError("比较基准不属于本轮之前的历史")
-            if run_id not in loaded:
-                pm = self.store.manifest(run_id)
-                if pm["status"] in UNFINISHED or not (self.store.locate(run_id)/"snapshots.jsonl.gz").is_file():
+            identity = (profile, run_id)
+            if identity not in loaded:
+                pm = source.manifest(run_id)
+                if profile != self.store.profile and parse_time(pm["startedAt"]) >= parse_time(m["startedAt"]):
+                    raise ValueError("继承基准不属于本轮之前的历史")
+                if pm["status"] in UNFINISHED or not (source.locate(run_id)/"snapshots.jsonl.gz").is_file():
                     raise ValueError("已选基准未归档或快照归档缺失")
-                loaded[run_id] = (pm, {scope_key(s): s for s in self.store.snapshots(run_id)})
-            pm, snaps = loaded[run_id]
+                loaded[identity] = (pm, {scope_key(s): s for s in source.snapshots(run_id)})
+            pm, snaps = loaded[identity]
             snap = snaps.get(key)
             if (snap is None or pm["scopes"].get(key, {}).get("status") != "complete"
                     or not shared_scope_compatible(m, pm, key) or digest(snap) != ref["snapshotHash"]
