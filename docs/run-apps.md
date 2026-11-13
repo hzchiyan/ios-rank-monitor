@@ -1,6 +1,6 @@
 # 应用轮次运行说明
 
-本文件在稳定启动器startup返回后读取。所有后续命令走稳定启动器的command并保留本组profile，不能直接git pull。
+本文件在稳定启动器startup返回后读取。仓库config/runtime.json要求接电、接电系统sleep=0及显示器10分钟关闭；部署命令environment-apply仅人工授权时使用，定时只environment-check。永久接电策略覆盖调度之前及全部采集阶段，不用短命startup/caffeinate进程替代。拔电或设置漂移须恢复环境，不能靠终止本轮或更换编号绕过。所有后续命令走稳定启动器的command并保留本组profile，不能直接git pull。
 
 读取当前仓库AGENTS.md和本仓库.agents/skills/ios-rank-monitor/SKILL.md，执行 $ios-rank-monitor。本任务只处理应用，固定profile=apps；所有python3 .local/monitor-launcher.py command子命令均显式带--profile apps，不要跨组猜runId或读取另一组令牌。使用持久化本地项目目录，不新建worktree，不修改程序、配置或技能。
 

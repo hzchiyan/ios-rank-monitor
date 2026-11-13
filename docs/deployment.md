@@ -88,6 +88,24 @@ startup只对本次已领取执行权返回tokenFile，不输出token；读取�
 
 `.local/update-state.json`保存validating/applying/ready阶段及cohort的提交和两组已登记编号。validating中断可在下次重新校验；激活出错会重新读取实际HEAD，读取失败则afterCommit=null并说明未知，不能将旧编号当作实际版本；applying中断或状态损坏必须人工检查HEAD、工作区和两组轮次，不能盲删标记继续或自动回滚。激活后真实doctor不通过也停止，需要维护者修复已选版本/历史兼容性。全程使用data/updates/audit.jsonl记脱敏状态、提交编号及已确认runId；auditSaved=false须说明审计落盘失败，不能因而重复登记。候选临时目录正常结束自动清理，进程强制中断留下的目录由维护者确认无执行者后处理。日志、检查和审计只在本地，不上传。
 
+## 接电与锁屏部署
+
+本仓库config/runtime.json是跨电脑共用的要求，不是已完成系统配置的证明。默认requireACPower=true、acSleepMinutes=0、displaySleepMinutes=10（1～180整数）。每台macOS电脑首次部署或更新策略后单独执行：
+
+```sh
+python3 .local/monitor-launcher.py command environment-check --profile apps
+python3 .local/monitor-launcher.py command environment-apply --authorize --profile apps
+python3 .local/monitor-launcher.py command environment-check --profile games
+```
+
+第一次检查可能ready=false；仅部署时显式apply。普通用户需--authorize，在macOS原生管理员认证中输入密码，程序/聊天不读取密码；默认不发起交互认证。apply只运行固定的/usr/bin/pmset -c sleep 0 displaysleep 10（显示器分钟取仓库策略），仅接电参数。原参数与执行/读回结果保存在data/environment/<时间>.json；原参数无法保存时不会修改系统。并发部署由本地锁串行化，系统命令不成功或读回不一致不报告成功。认证/命令超时或无法读回时status=unknown、systemApplied=null，保留原备份与最后读回结果；先确认原认证请求已经结束并核对当前参数，再决定是否重试，不能自动重复申请认证。应用后记录落盘失败也须说明，原备份仍保留。需要回退时先查该次before.ac.sleep/displaysleep，由维护者授权恢复原接电值；不要复制其他电脑的原参数。电池策略、自动锁屏和密码要求、网络唤醒、定时唤醒、任务启停均不改。
+
+startup同步后显式读取environment，环境不满足时在start前停止；正式start也重新检查，保证旧更新程序激活新代码后不绕过新策略。恢复已有轮次时先恢复接电条件，不能用环境失败提前finalize/abort或轮换编号。测试、导入、render和邮件不新增电源副作用。环境检查失败可以修复电源后重新触发；数据/令牌仍由原所有权规则保护。只有确定不存在runtime配置的旧副本返回ready=true/status=not_configured仅为兼容，存在链接、目录或不可访问文件都阻断；不宣称新保障已配置；损坏配置、非macOS或系统无法读取则阻断。检查和应用都不会启动采集或发送邮件。
+
+永久接电不自动睡眠覆盖调度之前和整个采集/日期核实/归档阶段，不能用仅包裹startup命令的短期caffeinate替代。电脑接电、Codex保持运行、原用户保持登录，可锁屏并让显示器关闭；这不要求关闭锁屏密码或自动登录。每台电脑需在测试轮实际验收锁屏触发、公开页面读取、逐项保存和退出说明，才可把本地浏览器标为可用。系统参数正确也不能证明锁屏浏览器已经验收。
+
+该方案不让真正睡眠中的代码继续执行，不覆盖主动睡眠、合盖、拔电、注销、关机或FileVault开机登录。Power Nap/网络唤醒不是任意浏览器任务的执行保证。此版本不安装系统唤醒计划，不改变两条任务的暂停状态；另一个电脑也须单独应用本机策略。
+
 ## 5. 无记忆迁移验收
 
 - 不同路径（含空格/中文）新副本、新会话，只给入口句即可运行。

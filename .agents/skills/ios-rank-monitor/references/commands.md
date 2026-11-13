@@ -133,3 +133,11 @@ startup返回profile、update、doctors、run及auditSaved；update.status为dis
 .local/update.json完整字段见config/update.example.json：schemaVersion=1、enabled布尔值、remote命名远程、branch=main、onFailure=keep_current或stop、timeoutSeconds为1～300整数、validationTimeoutSeconds为1～1800整数。默认例子关闭，本机首次安装可显式开启；不把更新策略放入排名配置指纹。
 
 同步只在两组/两种模式没有进行中轮次和残留active标记时执行。只允许快进，不自动stash/reset/clean或修改本机邮箱/任务设置；候选不能跟踪data/或.local等保护路径，拒绝归档符号链接。applying中断标记会阻止盲目启动。同步完成后必须重读skill/本组运行说明，不能在已缓存旧模块的进程中继续执行新代码。旧轮固定codeCommit，新旧混用会拒绝续跑；旧无字段记录仍兼容。
+
+## 电源策略接口
+
+`environment-check [--profile apps|games]`只读config/runtime.json与pmset，返回ready/status/policy/checks/observed；ready=false退出1，缺配置为not_configured且ready=true只为旧副本兼容。checks是acPower、acSleepDisabled、displaySleepConfigured，缺字段不当0。browserWhileLockedVerified始终false，不能代替实际锁屏浏览器验收。
+
+`environment-apply [--authorize] [--profile apps|games]`仅显式部署使用；默认不交互，普通用户需要管理员时返回administrator_required，--authorize允许macOS原生管理员认证。root进程直接运行固定pmset -c命令，不使用配置任意命令。只设置接电sleep=0和displaySleepMinutes，不动电池/密码/唤醒/任务。先记录data/environment原AC设置，成功读回才status=applied；已满足返回unchanged不改系统。失败返回明确reason；systemApplied说明本次命令后最后读回是否完整符合策略；false不代表所有参数都未改变，unknown时为null。认证超时为apply_timeout，无法读回为verification_unavailable，status=unknown/retryRequiresReview=true；lastReadbackReady仅表示即时观察，先确认原认证请求结束并核对参数再重试，不自动重发。只有确定缺失的策略才兼容，链接/不可访问文件必须阻断。原记录保留用于维护者授权回退。
+
+startup返回environment（等待另一组时可能未检查，须明示），不满足为update.reason=runtime_not_ready、failure.step=environment-check，无新轮次/令牌。正式CLI start在登记前再次检查；不新增独立重试或归档流程。startup --check-only也返回environment，但仍只离线检查、不登记，退出0不表示实际ready。

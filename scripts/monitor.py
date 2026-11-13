@@ -33,6 +33,9 @@ def main():
     from rank_monitor.core import Store, config_id, scopes
     parser = argparse.ArgumentParser(description="七麦 iOS 榜单本地监测工具")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("environment-check", help="只读检查仓库电源策略，不采集、不改系统")
+    environment = sub.add_parser("environment-apply", help="部署接电电源策略，保留电池和锁屏设置")
+    environment.add_argument("--authorize", action="store_true", help="允许原生管理员认证，仅部署时使用")
     importer = sub.add_parser("import-legacy", help="导入本地旧版快照，不访问网络")
     importer.add_argument("path")
     importer.add_argument("--mode", choices=["formal", "test"], default="formal")
@@ -59,6 +62,18 @@ def main():
         command.add_argument("--profile", choices=["apps", "games"], default="apps")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
+    if args.command in {"environment-check", "environment-apply"}:
+        from rank_monitor.runtime import check_environment, apply_environment
+        result = (apply_environment(root, args.authorize) if args.command == "environment-apply"
+                  else check_environment(root))
+        result["_exitCode"] = 0 if result["ready"] else 1
+        return result
+    if args.command == "start" and args.mode != "test":
+        from rank_monitor.runtime import check_environment
+        environment = check_environment(root)
+        if not environment["ready"]:
+            return {"error":"运行环境未满足仓库策略；请检查environment-check及部署说明",
+                    "environment":environment,"_exitCode":1}
     if args.command == "mail-check":
         from rank_monitor.mailer import check_mail
         return check_mail(root)

@@ -74,6 +74,21 @@ python3 .local/monitor-launcher.py startup --profile apps --check-only
 
 默认fetch或候选校验失败时继续当前版本，明确`kept_current`；可设`onFailure:stop`。脏工作区、错误分支、损坏历史和激活中断会停止，不能用reset/stash/clean绕过。每次同步与启动结果记录于`data/updates/audit.jsonl`，不含令牌。更新不会覆盖本地邮箱、授权码、数据或任务设置。详细配置、恢复限制见[部署说明](docs/deployment.md)。
 
+## 接电、锁屏与电源策略
+
+[config/runtime.json](config/runtime.json)保存可随仓库部署的运行要求：接电、接电系统自动睡眠关闭（sleep=0）、显示器空闲10分钟关闭。系统策略独立于排名配置，不改变历史比较结果或本地邮箱；Git更新不会自行修改macOS设置。
+
+```sh
+python3 .local/monitor-launcher.py command environment-check --profile apps
+python3 .local/monitor-launcher.py command environment-apply --authorize --profile apps
+```
+
+check只读取；apply是显式部署动作，需要管理员权限，--authorize使用macOS原生认证，不收集密码。应用前在data/environment保存原接电参数，再只改变接电sleep/displaysleep并读回，不修改电池、锁屏密码、唤醒计划或任务启停。没有--authorize且不是管理员进程时只报告需要认证。认证超时或无法读回会明确标为unknown并保留原备份，先核对系统请求结束及当前参数，不自动重试。当前两条定时任务保持暂停。
+
+定时startup在同步后用新进程检查电源环境，正式手动start也在登记前检查；未满足时不创建轮次或令牌，已有进度保留。check-only可查看environment实际结果，其退出0只表示检查完成，不能替代environment.ready。旧副本缺runtime策略保留兼容并显示not_configured，不能称已满足接电保障。
+
+接电策略使系统在调度前与整个浏览器采集期保持唤醒，同时允许锁屏及显示器关闭。必须保持Codex运行和原用户登录会话；锁屏下浏览器操作仍需实机验收。不覆盖主动睡眠、笔记本合盖、拔电、注销、关机、重启后的登录或网络故障；真实整机睡眠无法由任务自身唤醒。详细部署和恢复见[部署指南](docs/deployment.md)。
+
 ## 本地报告
 
 ```text

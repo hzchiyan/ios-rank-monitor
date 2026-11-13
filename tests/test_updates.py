@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -19,6 +20,8 @@ class UpdateTests(unittest.TestCase):
         self.git(base,'init','--bare','-b','main',str(self.remote))
         self.git(base,'clone',str(self.remote),str(self.root))
         for name in ['scripts','config','assets']:shutil.copytree(helpers.SOURCE/name,self.root/name)
+        (self.root/'config/runtime.json').unlink(missing_ok=True)
+        self.cli_env=dict(os.environ)
         (self.root/'.gitignore').write_text('/data/\n/.local/\n__pycache__/\n*.pyc\n')
         (self.root/'release-marker.txt').write_text('initial')
         tests=self.root/'tests';tests.mkdir()
@@ -48,7 +51,7 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(p.returncode,0,p.stderr+p.stdout);return json.loads(p.stdout)
 
     def call(self,*args,ok=True):
-        p=subprocess.run([sys.executable,str(self.root/'.local/monitor-launcher.py'),*args],cwd=self.root,capture_output=True,text=True)
+        p=subprocess.run([sys.executable,str(self.root/'.local/monitor-launcher.py'),*args],cwd=self.root,capture_output=True,text=True,env=self.cli_env)
         self.assertEqual(p.returncode==0,ok,p.stderr+p.stdout)
         return json.loads(p.stdout)
 
@@ -279,6 +282,67 @@ class UpdateTests(unittest.TestCase):
                 r=self.call('startup','--profile','apps',ok=False)
                 self.assertEqual(r['update']['reason'],'invalid_update_state')
                 self.assertFalse((self.root/'data/state.json').exists())
+
+    def power_fixture(self, ready=False):
+        folder=self.root/'data/power-fixture';folder.mkdir(parents=True,exist_ok=True)
+        self.power_sample=folder/'sample.json'
+        self.power_sample.write_text(json.dumps({'sleep':0 if ready else 1,'displaysleep':10 if ready else 0,'source':'AC Power'}))
+        exe=folder/'pmset'
+        exe.write_text('#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\nc=json.loads(Path('+repr(str(self.power_sample))+').read_text())\nif sys.argv[1:]==["-g","custom"]: print("Battery Power:\\n sleep 3\\n displaysleep 2\\nAC Power:\\n sleep "+str(c["sleep"])+"\\n displaysleep "+str(c["displaysleep"]))\nelif sys.argv[1:]==["-g","batt"]: print("Now drawing from "+repr(c["source"]))\nelse: sys.exit(99)\n')
+        exe.chmod(0o700);self.cli_env['PATH']=str(folder)+os.pathsep+self.cli_env.get('PATH','')
+
+    def enable_runtime_policy(self):
+        (self.root/'config/runtime.json').write_bytes((helpers.SOURCE/'config/runtime.json').read_bytes())
+        self.commit(self.root);self.configure(enabled=False)
+
+    @unittest.skipUnless(sys.platform=='darwin','macOS physical integration boundary')
+    def test_runtime_check_blocks_start_before_round_and_token(self):
+        self.power_fixture();self.enable_runtime_policy()
+        r=self.call('startup','--profile','games',ok=False)
+        self.assertEqual(r['update']['reason'],'runtime_not_ready')
+        self.assertFalse(r['environment']['ready']);self.assertEqual(r['failure']['step'],'environment-check')
+        self.assertFalse((self.root/'data/games/state.json').exists());self.assertFalse(list((self.root/'.local/tokens').rglob('*')))
+
+    @unittest.skipUnless(sys.platform=='darwin','macOS physical integration boundary')
+    def test_manual_formal_start_enforces_runtime_but_test_round_remains_isolated(self):
+        self.power_fixture();self.enable_runtime_policy()
+        r=self.call('command','start','--profile','apps',ok=False)
+        self.assertFalse(r['environment']['ready']);self.assertFalse((self.root/'data/state.json').exists())
+        r=self.call('command','start','--profile','apps','--mode','test')
+        self.assertIn('runId',r);self.assertFalse((self.root/'data/state.json').exists())
+
+    @unittest.skipUnless(sys.platform=='darwin','macOS physical integration boundary')
+    def test_compliant_power_allows_formal_start_and_check_only_is_read_only(self):
+        self.power_fixture(ready=True);self.enable_runtime_policy()
+        checked=self.call('startup','--profile','apps','--check-only')
+        self.assertTrue(checked['environment']['ready']);self.assertFalse((self.root/'data/state.json').exists())
+        r=self.call('startup','--profile','apps');self.assertIn('runId',r['run']);self.assertTrue(r['environment']['ready'])
+        self.assertFalse((self.root/'data/environment').exists())
+
+    @unittest.skipUnless(sys.platform=='darwin','macOS physical integration boundary')
+    def test_new_policy_after_sync_is_checked_before_any_formal_registration(self):
+        self.power_fixture()
+        (self.publisher/'config/runtime.json').write_bytes((helpers.SOURCE/'config/runtime.json').read_bytes())
+        target=self.commit(self.publisher);self.git(self.publisher,'push','origin','main')
+        r=self.call('startup','--profile','apps',ok=False)
+        self.assertEqual(r['update']['afterCommit'],target);self.assertEqual(r['update']['reason'],'runtime_not_ready')
+        self.assertFalse((self.root/'data/state.json').exists())
+
+    @unittest.skipUnless(sys.platform=='darwin','macOS physical integration boundary')
+    def test_power_disconnect_keeps_ongoing_round_and_token_unchanged(self):
+        self.power_fixture(ready=True);self.enable_runtime_policy()
+        run=self.call('startup','--profile','apps')['run']
+        manifest=self.root/run['relativePath']/'manifest.json';before=manifest.read_bytes()
+        token=self.root/run['tokenFile'];original_token=token.read_bytes()
+        self.power_sample.write_text(json.dumps({'sleep':0,'displaysleep':10,'source':'Battery Power'}))
+        r=self.call('startup','--profile','apps',ok=False)
+        self.assertEqual(r['update']['reason'],'runtime_not_ready');self.assertEqual(manifest.read_bytes(),before)
+        self.assertEqual(token.read_bytes(),original_token)
+        self.assertEqual(len(json.loads((self.root/'data/state.json').read_text())['runs']),1)
+
+    def test_legacy_copy_without_policy_does_not_require_physical_power_state(self):
+        r=self.call('startup','--profile','games')
+        self.assertEqual(r['environment']['status'],'not_configured');self.assertIn('runId',r['run'])
 
     def test_unicode_protected_paths_are_not_installed(self):
         folder=self.publisher/'data';folder.mkdir();(folder/'生产数据.json').write_text('synthetic forbidden data')

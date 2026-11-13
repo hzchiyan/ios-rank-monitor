@@ -37,6 +37,14 @@ description: 在本仓库初始化、部署、采集、恢复中断的七麦iOS�
 
 读取update.status及beforeCommit/afterCommit、失败原因和审计是否保存；blocked无有效run时给出原因/恢复动作，registrationUncertain不表示已成功领取。run.skipped或cancelled沿用原处理。有tokenFile仅表示本次已领取，不得回显；仅在此次领取后读一次，失权不重读。工具仍运行时按session/cell等待，不重复startup。每次总结标明实际代码版本；本机邮箱、数据、投递记录、时点/模型/启停均不自动覆盖。审计在data/updates/audit.jsonl，更新中断标记在.local/update-state.json；仅维护者在确认Git及文件状态后处理，代理不能删除标记绕过。
 
+## 接电与系统就绪
+
+按config/runtime.json部署：必须接电，接电系统自动睡眠为0，显示器默认10分钟关闭。Git只更新策略文件，不自动修改系统。部署请求可显式调用environment-apply --authorize；原生系统认证由用户本机输入，不读取/打印密码，原接电参数及读回结果留data/environment。只改接电sleep/displaysleep，保留电池、锁屏密码、唤醒安排及任务状态。部署返回unknown/apply_timeout/verification_unavailable时先确认原系统认证请求结束并核对参数，不自动重试、不删除原备份；即时读回不证明超时请求以后不会生效。
+
+定时只读取environment-check，startup会在同步后新进程检查，正式start也在登记前检查；environment.ready=false时说明具体checks/reason及需要恢复的接电/设置，不运行apply、不删除策略、不修改系统或提前归档已有轮次。没有领取执行权时不以progress/suspend争抢，原数据留待恢复。check-only退出0不代表environment.ready。旧副本not_configured仅表示兼容，不宣称部署了电源保障。
+
+永久接电策略覆盖触发前和整个浏览器采集过程，不使用仅包裹startup的短期保活来冒充完整保障。允许锁屏及熄屏，保持Codex和原登录会话；browserWhileLockedVerified=false须明确实机浏览器未验收，不根据sleep=0宣称页面一定可读。不主动锁屏/合盖或睡眠用户电脑做测试；需要此验收时先约定测试。拔电、主动睡眠、合盖、注销、关机或重启登录不在保证内；不安装唤醒计划、不自动解锁。另一台电脑也须单独检查/应用。
+
 ## 命令失败与退出说明
 
 每次命令或浏览器工具返回failed、非零退出码、异常或无法解析的结果时，先读取可用的退出码、JSON错误及stderr，脱敏后判断下一步，不仅留下失败调用就结束对话。调用封装必须保留错误正文，不能让JSON解析或进程异常掩盖原始错误；不打印包含令牌的完整命令、异常对象或凭据。

@@ -107,6 +107,9 @@ def monitor(root, args, fd, timeout=60):
         p = subprocess.run([sys.executable, str(root/'scripts/monitor.py'), *args], cwd=root,
                            env=env, pass_fds=(fd,), capture_output=True, text=True, timeout=timeout)
         value = json.loads(p.stdout)
+        if args[0] == 'environment-check' and isinstance(value, dict) and type(value.get('ready')) is bool:
+            if (p.returncode == 0) == value['ready']:
+                return value
         if p.returncode or not isinstance(value, dict):
             raise UpdateError('monitor_failed', step=args[0], profile=args[-1],
                               detail=safe_detail(value.get('error', '命令未成功') if isinstance(value,dict) else '结果格式无效'))
@@ -150,7 +153,8 @@ def validate(root, target, config):
 def audit(root, result):
     path = root/'data/updates/audit.jsonl'
     value = {'observedAt':datetime.now(timezone.utc).isoformat(), 'profile':result['profile'],
-             'update':result['update'], 'runId':result.get('run',{}).get('runId'), 'failure':result.get('failure')}
+             'update':result['update'], 'runId':result.get('run',{}).get('runId'), 'failure':result.get('failure'),
+             'environment':result.get('environment')}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open('a') as stream:
@@ -197,6 +201,7 @@ def startup(root, profile, check_only=False):
         update = result['update']; update.update(beforeCommit=before,afterCommit=before,busyRounds=busy)
         if check_only:
             update.update(status='check_only',enabled=config['enabled'],onFailure=config['onFailure'],branch=branch,dirty=dirty)
+            result['environment']=monitor(root,['environment-check','--profile',profile],fd)
             return result,0
         if dirty: raise UpdateError('dirty_checkout')
         if config['enabled'] and branch != config['branch']: raise UpdateError('wrong_branch')
@@ -239,6 +244,10 @@ def startup(root, profile, check_only=False):
                 update.update(status='kept_current',reason=str(error))
                 if error.context:
                     update['validationStep']=error.context.get('step')
+        result['environment']=monitor(root,['environment-check','--profile',profile],fd)
+        if not result['environment']['ready']:
+            raise UpdateError('runtime_not_ready',step='environment-check',profile=profile,
+                              detail=result['environment'].get('reason','运行环境未满足仓库策略'))
         result['doctors']={p:monitor(root,['doctor','--profile',p],fd) for p in ['apps','games']}
         run = monitor(root,['start','--profile',profile],fd)
         if run.pop('token',None) is not None:

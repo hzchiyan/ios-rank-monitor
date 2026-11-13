@@ -16,6 +16,8 @@ class Harness(unittest.TestCase):
         for name in ["config", "scripts", "assets"]:
             if (SOURCE / name).exists():
                 shutil.copytree(SOURCE / name, self.root / name)
+        # Physical machine policy has dedicated synthetic tests.
+        (self.root / "config/runtime.json").unlink(missing_ok=True)
         # Ranking v1 fixtures remain independent of the separately tested release policy.
         config_path = self.root / "config/monitor.json"
         config = json.loads(config_path.read_text())

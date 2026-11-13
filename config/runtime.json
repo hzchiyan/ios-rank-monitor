@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "requireACPower": true,
+  "acSleepMinutes": 0,
+  "displaySleepMinutes": 10
+}
